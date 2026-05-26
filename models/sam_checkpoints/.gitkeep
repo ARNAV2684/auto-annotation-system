@@ -1,0 +1,2 @@
+# SAM 2 / GroundingDINO weights are downloaded here at setup time.
+# The weights themselves are gitignored (large binaries). This file keeps the dir tracked.

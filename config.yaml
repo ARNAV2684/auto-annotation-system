@@ -1,0 +1,53 @@
+# ──────────────────────────────────────────────────────────────────────────
+# Auto Annotation System — central configuration
+# No hardcoded paths/thresholds in code: everything tunable lives here.
+# Paths are relative to the repo root unless absolute.
+# ──────────────────────────────────────────────────────────────────────────
+
+paths:
+  models_dir: models/sam_checkpoints
+  data_dir: data
+  sample_images: data/sample_images
+  sample_annotations: data/sample_annotations
+  output_dir: outputs
+
+# ─── SAM 2 ───
+sam:
+  # Variant: "hiera_s" (fast, dev) or "hiera_b_plus" (more accurate). Fits 8 GB GPU.
+  variant: hiera_s
+  checkpoint: models/sam_checkpoints/sam2.1_hiera_small.pt
+  model_cfg: configs/sam2.1/sam2.1_hiera_s.yaml
+  device: auto            # auto | cuda | cpu
+  # SamAutomaticMaskGenerator tuning (Stage 4 of the brief pipeline)
+  auto:
+    points_per_side: 32
+    pred_iou_thresh: 0.85
+    stability_score_thresh: 0.92
+    min_mask_region_area: 100
+
+# ─── Preprocessing (ported from latest/tree_counter.py) ───
+preprocess:
+  target_size: 1024       # SAM optimal longest-edge
+  clahe_clip_limit: 2.0
+  clahe_tile_size: 8
+  sharpen_strength: 0.3
+
+# ─── Mask post-processing ───
+mask:
+  min_area: 100           # drop noise masks below this pixel area
+  nms_iou_threshold: 0.5  # merge/dedupe overlapping masks
+  polygon_epsilon: 2.0    # Douglas-Peucker simplification tolerance
+
+# ─── Detection (GroundingDINO — Sprint 2) ───
+detector:
+  box_threshold: 0.20
+  text_threshold: 0.20
+  prompts:
+    - tree
+    - palm tree
+
+# ─── Class list for the active project (human picks label on approval) ───
+classes:
+  - tree
+  - palm_tree
+  - shrub

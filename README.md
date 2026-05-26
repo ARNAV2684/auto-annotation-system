@@ -29,6 +29,26 @@ upload → SAM 2 embeds image once → prompt (GroundingDINO text | click | box)
 | Frontend | React + Vite | `frontend/` (Sprint 5) |
 | Config | `config.yaml` (no hardcoding) | repo root |
 
+## Project roadmap — Sprints 1–7
+
+The project is delivered in seven sprints. Each sprint is a GitHub milestone; work
+lands on `feature/*` branches via Pull Requests into `develop`, and each sprint
+closes with a tagged `develop → main` release (`v0.1` … `v0.7`).
+
+| Sprint | Theme | What gets built | Outcome |
+|:------:|-------|-----------------|---------|
+| **1** | **Foundation** | Repo scaffold, GPU environment (CUDA PyTorch), SAM 2 inference core (point / box / automatic modes), image preprocessing, CLI smoke test | SAM 2 produces masks on a real drone image, on the GPU |
+| **2** | **Detection + Grounded-SAM** | GroundingDINO text-prompted detector, mask post-processing (filter, NMS, contours, polygon simplify), the "text → boxes → SAM masks" chain | Type a word ("tree") → clean masks appear automatically |
+| **3** | **Annotation export** | YOLO / COCO / Pascal VOC converters, class-name mapping, export validation + packaging, stats summary, ≥5 unit tests per converter | Masks export to all three industry formats, validated |
+| **4** | **Backend API** | FastAPI app, REST routes (upload, infer, auto-detect, annotations, export, stats), server-side model + embedding cache, batch processing, API tests | The whole engine is callable over HTTP (Swagger / curl) |
+| **5** | **Frontend** | React + Vite review UI: image upload, canvas mask overlay, click = point prompt, drag = box prompt, auto-detect, approve/reject + class labels, export & download | End-to-end human-in-the-loop tool: upload → review → export |
+| **6** | **Custom training** | Label drone data with the tool, fine-tune SAM 2 (and/or train a detector) on drone vegetation, before/after evaluation, feed the trained model back in | A fine-tuned model specialised for our drone imagery |
+| **7** | **Dockerization & shipping** | Backend + frontend Dockerfiles (GPU-enabled), `docker-compose.yml`, health checks, `CHANGELOG.md`, "Run with Docker" docs | One command (`docker compose up`) launches the full system anywhere |
+
+**Workflow rules (all sprints):** Conventional Commits (`feat:`, `fix:`, `docs:`,
+`test:`, `refactor:`); PR per feature; `ruff` lint + Google-style docstrings + type
+hints; never commit weights, `.env`, or `.venv`; target ≥70% test coverage.
+
 ## Environment setup
 
 Requires **Python 3.10+** and (for GPU) an NVIDIA GPU with **CUDA 12.8+**
