@@ -1,0 +1,30 @@
+# ──────────────────────────────────────────────────────────────────────────
+# Runtime dependencies. Exact versions will be pinned (via `pip freeze`) after
+# the environment is built & verified in Sprint 1, per brief §13.3.
+#
+# NOTE: PyTorch is installed SEPARATELY with the CUDA 12.8 index (RTX 5060 /
+# Blackwell), not from PyPI defaults. See README "Environment setup".
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+# ──────────────────────────────────────────────────────────────────────────
+
+# Core CV / array
+numpy
+opencv-python
+Pillow
+
+# Config / models
+pyyaml
+pydantic
+python-dotenv
+
+# SAM 2 installed from source (facebookresearch/sam2) — see README.
+# Detection (Sprint 2): GroundingDINO via HuggingFace transformers
+transformers
+
+# Visualization
+matplotlib
+
+# Testing / lint (dev)
+pytest
+pytest-cov
+ruff
