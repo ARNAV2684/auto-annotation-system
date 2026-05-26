@@ -1,0 +1,17 @@
+# Dev + CI dependencies (GPU-free, lightweight).
+#
+# NOTE: torch / sam2 / transformers are intentionally NOT here — they are heavy and
+# GPU-specific, installed separately for local runtime (see README). CI runs only the
+# fast, GPU-free checks (lint + logic/unit tests), so it needs none of them.
+
+ruff
+pytest
+pytest-cov
+
+# Light runtime deps exercised by GPU-free unit tests
+numpy
+pillow
+opencv-python-headless
+pyyaml
+python-dotenv
+pydantic
