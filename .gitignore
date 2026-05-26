@@ -1,0 +1,48 @@
+# ─── Python ───
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# ─── Virtual environments ───
+.venv/
+venv/
+env/
+
+# ─── Environment / secrets ───
+.env
+*.env
+!.env.example
+
+# ─── Model weights (large binaries — never commit) ───
+models/sam_checkpoints/*
+!models/sam_checkpoints/.gitkeep
+*.pt
+*.pth
+*.onnx
+
+# ─── Data outputs / scratch ───
+data/sample_images/*
+!data/sample_images/.gitkeep
+data/sample_annotations/*
+!data/sample_annotations/.gitkeep
+outputs/
+*.zip
+
+# ─── Frontend (Node) ───
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# ─── Tooling / IDE / OS ───
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
