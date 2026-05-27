@@ -39,6 +39,10 @@ mask:
   polygon_epsilon: 2.0    # Douglas-Peucker simplification tolerance
 
 # ─── Detection (GroundingDINO — Sprint 2) ───
+grounding_dino:
+  model_id: IDEA-Research/grounding-dino-base
+  device: auto            # auto | cuda | cpu
+
 detector:
   box_threshold: 0.20
   text_threshold: 0.20

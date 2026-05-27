@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import os
 from pathlib import Path
 
 import numpy as np
@@ -29,26 +28,9 @@ from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 from utils.config import load_config
+from utils.device import resolve_device
 
 logger = logging.getLogger(__name__)
-
-
-def resolve_device(requested: str | None = None) -> str:
-    """Resolve the torch device to use.
-
-    Order of precedence: explicit ``requested`` arg, ``SAM_DEVICE`` env var, the
-    ``sam.device`` config value, then ``"auto"`` (CUDA if available, else CPU).
-
-    Args:
-        requested: Explicit device string, or ``None`` to fall back to config/env.
-
-    Returns:
-        Either ``"cuda"`` or ``"cpu"``.
-    """
-    choice = requested or os.getenv("SAM_DEVICE") or load_config().get("sam.device", "auto")
-    if choice == "auto":
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    return choice
 
 
 class SAM2Segmenter:
