@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useImages } from '../api/hooks'
+import { useEffect, useState } from 'react'
+import { useEmbed, useImages } from '../api/hooks'
 import { AutoDetectPanel } from '../components/AutoDetectPanel'
 import { CanvasViewer, type Tool } from '../components/CanvasViewer'
 import { DetectionList } from '../components/DetectionList'
@@ -9,28 +9,34 @@ import { ToolPalette } from '../components/ToolPalette'
 interface ReviewPageProps {
   classes: string[]
   onBack: () => void
+  onOpenExport: () => void
 }
 
 /**
  * Three-column layout: left = image thumbnails, centre = canvas, right = controls
- * (auto-detect, detection list, tool palette).
+ * (auto-detect, detection list, export).
  *
  * Owns three pieces of UI state:
  *   - currentImageId (which image is being reviewed)
  *   - currentTool ('point' | 'box')
  *   - selectedAnnotationId (highlighted mask)
+ *
+ * Polish: as soon as the user opens an image, we pre-compute its SAM embedding
+ * so the first point/box prompt feels instant instead of paying the ~0.5s
+ * `set_image` cost on first click.
  */
-export function ReviewPage({ classes, onBack }: ReviewPageProps) {
+export function ReviewPage({ classes, onBack, onOpenExport }: ReviewPageProps) {
   const { data: images } = useImages()
+  const embed = useEmbed()
   const [currentImageId, setCurrentImageId] = useState<string | null>(null)
   const [currentTool, setCurrentTool] = useState<Tool>('point')
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null)
   // Tracks the previous image id so we can reset selection when it changes
-  // (React 19's "derive state during render" pattern — no effect needed).
+  // (React 19's "derive state during render" pattern - no effect needed).
   const [prevImageId, setPrevImageId] = useState<string | null>(null)
 
   // Auto-select the first image as soon as the list arrives (also during render
-  // — no effect needed; the next render will see the new currentImageId).
+  // - no effect needed; the next render will see the new currentImageId).
   if (!currentImageId && images && images.length > 0) {
     setCurrentImageId(images[0].image_id)
   }
@@ -38,6 +44,15 @@ export function ReviewPage({ classes, onBack }: ReviewPageProps) {
     setPrevImageId(currentImageId)
     setSelectedAnnotationId(null)
   }
+
+  // Pre-warm SAM's image embedding whenever the user opens an image. Fires-
+  // and-forgets the side effect (mutateAsync result is ignored).
+  const embedMutate = embed.mutate
+  useEffect(() => {
+    if (currentImageId) {
+      embedMutate(currentImageId)
+    }
+  }, [currentImageId, embedMutate])
 
   const currentImage = images?.find((i) => i.image_id === currentImageId) ?? null
 
@@ -84,10 +99,10 @@ export function ReviewPage({ classes, onBack }: ReviewPageProps) {
         </div>
       </section>
 
-      {/* Right: detect + detections */}
+      {/* Right: detect + detections + export */}
       <aside className="flex flex-col gap-4 border-l border-slate-200 bg-slate-50 p-4">
         {currentImage && <AutoDetectPanel imageId={currentImage.image_id} />}
-        <div className="flex-1 min-h-0">
+        <div className="min-h-0 flex-1">
           {currentImage && (
             <DetectionList
               imageId={currentImage.image_id}
@@ -97,6 +112,13 @@ export function ReviewPage({ classes, onBack }: ReviewPageProps) {
             />
           )}
         </div>
+        <button
+          type="button"
+          onClick={onOpenExport}
+          className="w-full rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow transition hover:bg-slate-700"
+        >
+          Export annotations →
+        </button>
       </aside>
     </div>
   )
