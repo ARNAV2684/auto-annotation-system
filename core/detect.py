@@ -12,27 +12,17 @@ CLI::
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-from core.detector import Box, GroundingDinoDetector
+from core.detector import GroundingDinoDetector
 from core.mask_processor import filter_by_area, nms
 from core.sam_inference import SAM2Segmenter
+from core.types import Detection
 from utils.config import load_config
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class Detection:
-    """One detected-and-segmented object."""
-
-    mask: np.ndarray  # boolean H x W
-    box: Box          # (x1, y1, x2, y2)
-    label: str
-    score: float
 
 
 def grounded_sam(
