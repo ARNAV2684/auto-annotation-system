@@ -24,6 +24,11 @@ transformers
 # Visualization
 matplotlib
 
+# Backend (Sprint 4): FastAPI + Uvicorn + multipart for file uploads
+fastapi
+uvicorn[standard]
+python-multipart
+
 # Testing / lint (dev)
 pytest
 pytest-cov
