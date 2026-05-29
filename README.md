@@ -87,6 +87,37 @@ docs/     architecture, API reference, user guide
 frontend/ React + Vite SPA (Sprint 5)
 ```
 
+## Running the backend (Sprint 4+)
+
+The FastAPI server loads the SAM 2 + GroundingDINO models once at startup and
+exposes the routes documented in [`docs/api_contract.md`](docs/api_contract.md).
+
+```powershell
+# from the repo root, with the venv activated
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Then open:
+
+- <http://localhost:8000/docs> — interactive **Swagger UI**: every route with a
+  click-to-try button. Use this to upload an image, run auto-detect, and download
+  a YOLO/COCO/VOC export without writing any JavaScript.
+- <http://localhost:8000/api/health> — health probe.
+
+Environment variables (all optional):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `API_HOST` | `0.0.0.0` | Bind address |
+| `API_PORT` | `8000` | Bind port |
+| `FRONTEND_ORIGIN` | `http://localhost:5173` | CORS-allowed origin for the React UI |
+| `LOAD_MODELS_ON_STARTUP` | `true` | Set to `false` to skip model load (useful for fast iteration on non-model routes) |
+
+Uploaded images, masks, and annotations live under
+`outputs/sessions/default/` (gitignored). When the project is later run inside
+Docker (Sprint 7), this folder will be mounted to a host directory so all data
+persists across container restarts.
+
 ## Development
 
 ```powershell
