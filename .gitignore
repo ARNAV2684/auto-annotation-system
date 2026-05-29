@@ -39,6 +39,7 @@ frontend/.vite/
 # ─── Local-only / private (never commit, never push) ───
 CLAUDE.md
 CLAUDE.local.md
+PROJECT_JOURNAL.md
 
 # ─── Tooling / IDE / OS ───
 .pytest_cache/
