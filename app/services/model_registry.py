@@ -15,15 +15,19 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
 
-from core.detect import grounded_sam
-from core.detector import GroundingDinoDetector
+# Lazy: the heavy GPU modules (torch / sam2 / transformers) are imported INSIDE
+# methods, never at module top, so test code and CI can import this file without
+# the GPU stack installed. The dependency-override in tests means ModelRegistry
+# is never actually instantiated in CI.
 from core.preprocessor import preprocess
-from core.sam_inference import SAM2Segmenter
-from core.types import Detection
+
+if TYPE_CHECKING:
+    from core.types import Detection
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +40,11 @@ class ModelRegistry:
     """
 
     def __init__(self) -> None:
+        # Heavy imports happen ONLY when we actually instantiate the registry.
+        # CI uses a stub registry (dependency override), so torch never imports there.
+        from core.detector import GroundingDinoDetector
+        from core.sam_inference import SAM2Segmenter
+
         logger.info("Loading SAM 2 ...")
         self.segmenter = SAM2Segmenter()
         logger.info("Loading GroundingDINO ...")
@@ -108,6 +117,8 @@ class ModelRegistry:
 
     def auto_detect(self, image_path: Path, prompts: list[str]) -> list[Detection]:
         """Run the full Grounded-SAM chain (text -> boxes -> masks) on one image."""
+        from core.detect import grounded_sam  # lazy; pulls torch transitively
+
         rgb = self.load_image_rgb(image_path)
         with self._lock:
             detections = grounded_sam(rgb, self.detector, self.segmenter, prompts)
