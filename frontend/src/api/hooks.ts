@@ -1,0 +1,177 @@
+// TanStack Query hooks around every backend route.
+//
+// Read hooks (`useQuery`) cache the response in browser memory and refetch when stale.
+// Write hooks (`useMutation`) call the backend, then invalidate the read caches that
+// depend on the data they changed — that's what makes the UI auto-refresh after
+// upload / inference / approve.
+
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseMutationResult,
+  type UseQueryResult,
+} from '@tanstack/react-query'
+import { deleteJson, getJson, patchJson, postFile, postJson } from './client'
+import type {
+  Annotation,
+  AnnotationPatch,
+  AutoDetectRequest,
+  BoxRequest,
+  EmbedResponse,
+  ExportRequest,
+  ExportResponse,
+  HealthResponse,
+  ImageRecord,
+  PointRequest,
+  StatsResponse,
+} from './types'
+
+// ─── query keys (centralised so invalidation is type-safe) ───────────────
+
+export const qk = {
+  health: ['health'] as const,
+  images: ['images'] as const,
+  annotationsFor: (imageId: string) => ['annotations', imageId] as const,
+  stats: ['stats'] as const,
+}
+
+// ─── reads ───────────────────────────────────────────────────────────────
+
+export function useHealth(): UseQueryResult<HealthResponse> {
+  return useQuery({
+    queryKey: qk.health,
+    queryFn: () => getJson<HealthResponse>('/api/health'),
+    refetchInterval: 10_000,
+  })
+}
+
+export function useImages(): UseQueryResult<ImageRecord[]> {
+  return useQuery({
+    queryKey: qk.images,
+    queryFn: () => getJson<ImageRecord[]>('/api/images'),
+  })
+}
+
+export function useAnnotations(imageId: string | null): UseQueryResult<Annotation[]> {
+  return useQuery({
+    queryKey: imageId ? qk.annotationsFor(imageId) : ['annotations', 'none'],
+    queryFn: () => getJson<Annotation[]>(`/api/images/${imageId}/annotations`),
+    enabled: !!imageId,
+  })
+}
+
+export function useStats(): UseQueryResult<StatsResponse> {
+  return useQuery({
+    queryKey: qk.stats,
+    queryFn: () => getJson<StatsResponse>('/api/stats'),
+  })
+}
+
+// ─── writes ──────────────────────────────────────────────────────────────
+
+export function useUpload(): UseMutationResult<ImageRecord, Error, File> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (file: File) => postFile<ImageRecord>('/api/upload', file),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.images })
+      qc.invalidateQueries({ queryKey: qk.stats })
+    },
+  })
+}
+
+export function useEmbed(): UseMutationResult<EmbedResponse, Error, string> {
+  return useMutation({
+    mutationFn: (imageId: string) => postJson<EmbedResponse>(`/api/images/${imageId}/embed`, {}),
+  })
+}
+
+export function useInferPoint(
+  imageId: string,
+): UseMutationResult<Annotation[], Error, PointRequest> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body) => postJson<Annotation[]>(`/api/images/${imageId}/infer/point`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.annotationsFor(imageId) })
+      qc.invalidateQueries({ queryKey: qk.images })
+      qc.invalidateQueries({ queryKey: qk.stats })
+    },
+  })
+}
+
+export function useInferBox(imageId: string): UseMutationResult<Annotation, Error, BoxRequest> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body) => postJson<Annotation>(`/api/images/${imageId}/infer/box`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.annotationsFor(imageId) })
+      qc.invalidateQueries({ queryKey: qk.images })
+      qc.invalidateQueries({ queryKey: qk.stats })
+    },
+  })
+}
+
+export function useAutoDetect(
+  imageId: string,
+): UseMutationResult<Annotation[], Error, AutoDetectRequest> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body) => postJson<Annotation[]>(`/api/images/${imageId}/auto-detect`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.annotationsFor(imageId) })
+      qc.invalidateQueries({ queryKey: qk.images })
+      qc.invalidateQueries({ queryKey: qk.stats })
+    },
+  })
+}
+
+export function usePatchAnnotation(): UseMutationResult<
+  Annotation,
+  Error,
+  { annotationId: string; patch: AnnotationPatch }
+> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ annotationId, patch }) =>
+      patchJson<Annotation>(`/api/annotations/${annotationId}`, patch),
+    onSuccess: (annotation) => {
+      qc.invalidateQueries({ queryKey: qk.annotationsFor(annotation.image_id) })
+      qc.invalidateQueries({ queryKey: qk.images })
+      qc.invalidateQueries({ queryKey: qk.stats })
+    },
+  })
+}
+
+export function useDeleteAnnotation(): UseMutationResult<
+  void,
+  Error,
+  { annotationId: string; imageId: string }
+> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ annotationId }) => deleteJson<void>(`/api/annotations/${annotationId}`),
+    onSuccess: (_void, { imageId }) => {
+      qc.invalidateQueries({ queryKey: qk.annotationsFor(imageId) })
+      qc.invalidateQueries({ queryKey: qk.images })
+      qc.invalidateQueries({ queryKey: qk.stats })
+    },
+  })
+}
+
+export function useExport(): UseMutationResult<ExportResponse, Error, ExportRequest> {
+  return useMutation({
+    mutationFn: (body) => postJson<ExportResponse>('/api/export', body),
+  })
+}
+
+export function useDeleteSession(): UseMutationResult<void, Error, void> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => deleteJson<void>('/api/session'),
+    onSuccess: () => {
+      qc.invalidateQueries() // session wipe nukes everything
+    },
+  })
+}

@@ -35,6 +35,8 @@ outputs/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/*.local
+frontend/.eslintcache
 
 # ─── Local-only / private (never commit, never push) ───
 CLAUDE.md
