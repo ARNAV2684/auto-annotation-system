@@ -118,12 +118,44 @@ Uploaded images, masks, and annotations live under
 Docker (Sprint 7), this folder will be mounted to a host directory so all data
 persists across container restarts.
 
+## Running the frontend (Sprint 5+)
+
+The React + Vite + Tailwind UI lives in `frontend/`. It talks to the backend
+via Vite's dev-server proxy — every `/api/*` request is forwarded to the
+backend on port 8000, so the frontend code never hardcodes the host.
+
+```powershell
+# one-time, from frontend/
+npm install
+
+# dev server with hot reload
+npm run dev
+# opens http://localhost:5173
+
+# production build (TypeScript check + Vite bundle)
+npm run build
+```
+
+You need **both servers running** for the app to work:
+
+| Terminal | Command | Port |
+|---|---|---|
+| 1 (backend) | `uvicorn app.main:app --reload --port 8000` | 8000 |
+| 2 (frontend) | `cd frontend && npm run dev` | 5173 |
+
+Open <http://localhost:5173> in your browser.
+
 ## Development
 
 ```powershell
-ruff check .          # lint (line length 100, PEP 8)
-pytest                # run tests
+ruff check .          # backend lint (PEP 8, line length 100)
+pytest                # backend tests
 pytest --cov          # coverage (target ≥ 70%)
+
+cd frontend
+npm run lint          # frontend lint (ESLint)
+npm run format        # auto-format with Prettier
+npm run build         # production build (also catches TypeScript errors)
 ```
 
 Branching: `main` (protected) ← `develop` ← `feature/*`; merges via PR.
