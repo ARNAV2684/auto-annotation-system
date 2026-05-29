@@ -1,55 +1,34 @@
 import { useState } from 'react'
 import { useDeleteSession, useImages } from './api/hooks'
 import { Header } from './components/Header'
+import { ReviewPage } from './pages/ReviewPage'
 import { UploadPage } from './pages/UploadPage'
 
+// Hardcoded for v1; mirrors config.yaml#classes on the backend. A future
+// GET /api/classes route would replace this.
+const CLASSES = ['tree', 'palm_tree', 'shrub']
+
 /**
- * Top-level shell.
+ * Top-level shell. Owns the "are we uploading or reviewing?" navigation.
  *
- * PR A (scaffold): shows the upload page. If any images already exist in the
- * session, shows a placeholder until PR B (review UI) lands.
+ * Upload page → Review page once the user clicks "Start Review".
+ * Review page → Upload page via its own back button.
  */
 export default function App() {
   const { data: images } = useImages()
   const deleteSession = useDeleteSession()
-  const [showReviewPlaceholder, setShowReviewPlaceholder] = useState(false)
-
-  const hasImages = (images?.length ?? 0) > 0
-  const inReview = hasImages && showReviewPlaceholder
+  const [view, setView] = useState<'upload' | 'review'>('upload')
 
   return (
     <div className="flex h-full flex-col">
       <Header onClearSession={() => deleteSession.mutate()} />
-      <main className="flex-1 overflow-auto">
-        {inReview ? (
-          <ReviewPlaceholder onBack={() => setShowReviewPlaceholder(false)} />
+      <main className="flex-1 overflow-hidden">
+        {view === 'review' && (images?.length ?? 0) > 0 ? (
+          <ReviewPage classes={CLASSES} onBack={() => setView('upload')} />
         ) : (
-          <UploadPage
-            imageCount={images?.length ?? 0}
-            onStartReview={() => setShowReviewPlaceholder(true)}
-          />
+          <UploadPage imageCount={images?.length ?? 0} onStartReview={() => setView('review')} />
         )}
       </main>
-    </div>
-  )
-}
-
-/** Filler shown after upload until PR B replaces it with the real ReviewPage. */
-function ReviewPlaceholder({ onBack }: { onBack: () => void }) {
-  return (
-    <div className="mx-auto mt-16 max-w-xl rounded border border-slate-200 bg-white p-8 text-center shadow-sm">
-      <h2 className="mb-2 text-xl font-semibold text-slate-900">Review UI coming in PR B</h2>
-      <p className="text-slate-600">
-        The scaffold (PR A) handles uploads and live stats. Click below to go back to the upload
-        page; the canvas + masks + approve buttons land in PR B.
-      </p>
-      <button
-        type="button"
-        onClick={onBack}
-        className="mt-6 rounded bg-slate-900 px-4 py-2 text-sm text-white transition hover:bg-slate-700"
-      >
-        ← Back to upload
-      </button>
     </div>
   )
 }
