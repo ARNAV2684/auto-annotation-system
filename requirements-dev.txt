@@ -15,3 +15,9 @@ opencv-python-headless
 pyyaml
 python-dotenv
 pydantic
+
+# Backend (Sprint 4): FastAPI + httpx for TestClient.
+# httpx is needed by starlette.testclient (lets CI exercise routes without a real server).
+fastapi
+python-multipart
+httpx
