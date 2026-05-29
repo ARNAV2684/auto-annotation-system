@@ -3,6 +3,7 @@
 import numpy as np
 
 from core.mask_processor import (
+    clamp_box_to_image,
     compute_iou,
     filter_by_area,
     mask_to_bbox,
@@ -57,3 +58,35 @@ def test_mask_to_bbox_of_square() -> None:
 
 def test_mask_to_bbox_empty_is_none() -> None:
     assert mask_to_bbox(np.zeros((5, 5), dtype=bool)) is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# clamp_box_to_image  (guards against GroundingDINO out-of-bounds predictions)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_clamp_box_passes_through_in_bounds() -> None:
+    assert clamp_box_to_image((10.0, 20.0, 100.0, 200.0), 1280, 720) == (10, 20, 100, 200)
+
+
+def test_clamp_box_clips_overshoot_to_image_bounds() -> None:
+    # ymax overshoots height (1299 > 1280) — exactly the bug from the 24-image batch run.
+    assert clamp_box_to_image((62.0, 1100.0, 369.0, 1299.0), 1280, 1280) == (62, 1100, 369, 1280)
+
+
+def test_clamp_box_clips_negative_origin_to_zero() -> None:
+    assert clamp_box_to_image((-5.0, -10.0, 50.0, 60.0), 1280, 720) == (0, 0, 50, 60)
+
+
+def test_clamp_box_returns_none_for_fully_outside() -> None:
+    # Both edges past the right side -> after clamp both become 1280 -> degenerate.
+    assert clamp_box_to_image((1290.0, 100.0, 1300.0, 200.0), 1280, 720) is None
+
+
+def test_clamp_box_returns_none_for_inverted_box() -> None:
+    # x2 < x1 even before clamping
+    assert clamp_box_to_image((100.0, 50.0, 90.0, 60.0), 1280, 720) is None
+
+
+def test_clamp_box_handles_float_input_truncating_to_int() -> None:
+    # 1279.99 should truncate to 1279 (below width 1280)
+    assert clamp_box_to_image((10.5, 20.5, 1279.99, 200.4), 1280, 720) == (10, 20, 1279, 200)
