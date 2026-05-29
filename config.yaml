@@ -55,3 +55,20 @@ classes:
   - tree
   - palm_tree
   - shrub
+
+# ─── Annotation export (Sprint 3) ───
+yolo:
+  mode: segmentation        # segmentation (polygons) | detection (boxes only)
+
+coco:
+  # Classes listed here are exported as RLE with iscrowd=1 — for dense, overlapping
+  # objects (e.g. tangled vegetation) where a single polygon would lie. Others use
+  # polygon segmentation with iscrowd=0. A human may override per-object in the UI.
+  crowd_classes: []         # e.g. [vegetation, forest, dense_canopy]
+  supercategory: object     # COCO category supercategory label
+
+voc:
+  database: GarudaUAV       # written into the <source><database> tag
+
+export:
+  zip: true                 # also produce exports.zip alongside the per-format folders

@@ -17,6 +17,7 @@ import torch
 from PIL import Image
 from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
 
+from core.mask_processor import clamp_box_to_image
 from utils.config import load_config
 from utils.device import resolve_device
 
@@ -89,8 +90,27 @@ class GroundingDinoDetector:
             target_sizes=[(image.height, image.width)],
         )[0]
 
-        boxes = [tuple(int(v) for v in box) for box in results["boxes"].cpu().numpy()]
-        scores = [float(s) for s in results["scores"].cpu().numpy()]
-        labels = list(results.get("text_labels") or results.get("labels") or [""] * len(boxes))
+        raw_boxes = results["boxes"].cpu().numpy()
+        raw_scores = results["scores"].cpu().numpy()
+        raw_labels = list(
+            results.get("text_labels") or results.get("labels") or [""] * len(raw_boxes)
+        )
+        # Clamp every box to image bounds; drop degenerate ones. GroundingDINO can
+        # predict edges slightly outside the image, which breaks VOC validation and
+        # downstream consumers that assume in-bounds coordinates.
+        boxes: list[Box] = []
+        scores: list[float] = []
+        labels: list[str] = []
+        dropped = 0
+        for box, score, label in zip(raw_boxes, raw_scores, raw_labels, strict=True):
+            clamped = clamp_box_to_image(tuple(box), image.width, image.height)
+            if clamped is None:
+                dropped += 1
+                continue
+            boxes.append(clamped)
+            scores.append(float(score))
+            labels.append(label)
+        if dropped:
+            logger.info("GroundingDINO: dropped %d degenerate/out-of-bounds boxes", dropped)
         logger.info("GroundingDINO: %d boxes for prompt '%s'", len(boxes), text)
         return boxes, scores, labels

@@ -114,3 +114,30 @@ def mask_to_bbox(mask: np.ndarray) -> Box | None:
     if xs.size == 0:
         return None
     return (float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max()))
+
+
+def clamp_box_to_image(
+    box: tuple[float, float, float, float], width: int, height: int
+) -> tuple[int, int, int, int] | None:
+    """Clamp an ``(x1, y1, x2, y2)`` box to the image rectangle.
+
+    GroundingDINO can predict boxes with an edge slightly outside the image (e.g.
+    ``ymax = 1299`` on a 1280-tall image). Without clamping, the resulting VOC
+    bounding box fails validation and downstream consumers reject the file.
+
+    Args:
+        box: ``(x1, y1, x2, y2)`` in image coordinates (floats or ints).
+        width: Image width in pixels.
+        height: Image height in pixels.
+
+    Returns:
+        The clamped integer box, or ``None`` if the result would be degenerate
+        (``x1 >= x2`` or ``y1 >= y2`` after clamping).
+    """
+    x1 = max(0, min(int(box[0]), width))
+    y1 = max(0, min(int(box[1]), height))
+    x2 = max(0, min(int(box[2]), width))
+    y2 = max(0, min(int(box[3]), height))
+    if x1 >= x2 or y1 >= y2:
+        return None
+    return (x1, y1, x2, y2)
