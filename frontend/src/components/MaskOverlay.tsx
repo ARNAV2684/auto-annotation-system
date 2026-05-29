@@ -4,7 +4,8 @@ import type { Annotation } from '../api/types'
 interface MaskOverlayProps {
   annotations: Annotation[]
   selectedId: string | null
-  scale: number
+  /** Current Stage scale - used to keep stroke widths constant in screen pixels. */
+  viewScale: number
   onSelect: (annotationId: string) => void
 }
 
@@ -26,22 +27,28 @@ function strokeFor(approved: Annotation['approved'], highlighted: boolean): stri
   return `rgba(202, 138, 4, ${alpha})`
 }
 
-/** Renders one Konva Line per polygon, coloured by approval state. */
-export function MaskOverlay({ annotations, selectedId, scale, onSelect }: MaskOverlayProps) {
+/**
+ * Renders one Konva ``Line`` per polygon in raw image-pixel coords. The Stage
+ * carries the view scale, so we only divide stroke widths by ``viewScale`` to
+ * keep them constant in screen pixels regardless of zoom.
+ */
+export function MaskOverlay({ annotations, selectedId, viewScale, onSelect }: MaskOverlayProps) {
+  const baseStroke = 1.5 / viewScale
+  const highlightStroke = 3 / viewScale
   return (
     <>
       {annotations.map((ann) =>
         ann.polygon.map((polygon, polyIdx) => {
           const highlighted = ann.annotation_id === selectedId
-          const scaledPoints = polygon.map((v) => v * scale)
           return (
             <Line
               key={`${ann.annotation_id}-${polyIdx}`}
-              points={scaledPoints}
+              points={polygon}
               closed
               fill={fillFor(ann.approved, highlighted)}
               stroke={strokeFor(ann.approved, highlighted)}
-              strokeWidth={highlighted ? 3 : 1.5}
+              strokeWidth={highlighted ? highlightStroke : baseStroke}
+              strokeScaleEnabled={false}
               onClick={() => onSelect(ann.annotation_id)}
               onTap={() => onSelect(ann.annotation_id)}
               listening
