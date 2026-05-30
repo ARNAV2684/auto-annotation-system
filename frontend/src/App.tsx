@@ -22,9 +22,9 @@ export default function App() {
   const [clearOpen, setClearOpen] = useState(false)
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-screen min-h-0 w-full min-w-0 flex-col overflow-hidden">
       <Header onClearSession={() => setClearOpen(true)} />
-      <main className="flex-1 overflow-hidden">
+      <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
         {view === 'review' && (images?.length ?? 0) > 0 ? (
           <ReviewPage
             classes={CLASSES}

@@ -57,10 +57,12 @@ export function ReviewPage({ classes, onBack, onOpenExport }: ReviewPageProps) {
   const currentImage = images?.find((i) => i.image_id === currentImageId) ?? null
 
   return (
-    <div className="grid h-full grid-cols-[260px_minmax(0,1fr)_320px]">
+    // grid with sensible minimums: at narrow widths the page gets a horizontal
+    // scrollbar instead of crushing the canvas column.
+    <div className="grid h-full min-h-0 min-w-[900px] grid-cols-[240px_minmax(420px,1fr)_320px] overflow-auto">
       {/* Left: image list */}
-      <aside className="flex flex-col border-r border-slate-200 bg-white">
-        <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
+      <aside className="flex min-h-0 min-w-0 flex-col border-r border-slate-200 bg-white">
+        <div className="flex flex-shrink-0 items-center justify-between border-b border-slate-200 px-3 py-2">
           <span className="text-sm font-semibold text-slate-700">Images</span>
           <button
             type="button"
@@ -70,20 +72,20 @@ export function ReviewPage({ classes, onBack, onOpenExport }: ReviewPageProps) {
             ← upload
           </button>
         </div>
-        <div className="flex-1 overflow-auto">
+        <div className="min-h-0 flex-1 overflow-auto">
           <ImageList selectedId={currentImageId} onSelect={setCurrentImageId} />
         </div>
       </aside>
 
       {/* Centre: canvas + tool palette */}
-      <section className="relative flex flex-col bg-slate-100">
-        <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-2">
-          <span className="truncate text-sm font-medium text-slate-700">
+      <section className="relative flex min-h-0 min-w-0 flex-col bg-slate-100">
+        <div className="flex flex-shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-2">
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-700">
             {currentImage ? currentImage.file_name : 'No image selected'}
           </span>
           <ToolPalette current={currentTool} onChange={setCurrentTool} />
         </div>
-        <div className="relative flex-1 overflow-hidden">
+        <div className="relative min-h-0 flex-1 overflow-hidden">
           {currentImage ? (
             <CanvasViewer
               image={currentImage}
@@ -100,8 +102,12 @@ export function ReviewPage({ classes, onBack, onOpenExport }: ReviewPageProps) {
       </section>
 
       {/* Right: detect + detections + export */}
-      <aside className="flex flex-col gap-4 border-l border-slate-200 bg-slate-50 p-4">
-        {currentImage && <AutoDetectPanel imageId={currentImage.image_id} />}
+      <aside className="flex min-h-0 min-w-0 flex-col gap-4 border-l border-slate-200 bg-slate-50 p-4">
+        {currentImage && (
+          <div className="flex-shrink-0">
+            <AutoDetectPanel imageId={currentImage.image_id} />
+          </div>
+        )}
         <div className="min-h-0 flex-1">
           {currentImage && (
             <DetectionList
@@ -115,7 +121,7 @@ export function ReviewPage({ classes, onBack, onOpenExport }: ReviewPageProps) {
         <button
           type="button"
           onClick={onOpenExport}
-          className="w-full rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow transition hover:bg-slate-700"
+          className="w-full flex-shrink-0 rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow transition hover:bg-slate-700"
         >
           Export annotations →
         </button>
