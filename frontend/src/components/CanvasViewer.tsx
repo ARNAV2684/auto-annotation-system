@@ -1,7 +1,7 @@
 import type Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import { useLayoutEffect, useRef, useState } from 'react'
-import { Group, Image as KonvaImage, Layer, Rect, Stage } from 'react-konva'
+import { Image as KonvaImage, Layer, Rect, Stage } from 'react-konva'
 import { useAnnotations, useInferBox, useInferPoint } from '../api/hooks'
 import type { ImageRecord } from '../api/types'
 import { MaskOverlay } from './MaskOverlay'
@@ -23,14 +23,44 @@ interface DragBox {
   y2: number
 }
 
+interface ViewTransform {
+  scale: number
+  panX: number
+  panY: number
+}
+
+const MIN_SCALE = 0.05
+const MAX_SCALE = 20
+const ZOOM_FACTOR = 1.15
+const MIN_BOX_PIXELS = 5
+
 /**
- * Image canvas with mask overlay + point/box prompt interactions.
+ * Image canvas with mask overlay + zoom / pan + point/box prompts.
  *
- * - Image is fit to the container; we track ``scale`` so polygons (which are in
- *   image-pixel coordinates) render at the right size.
- * - Click in "point" mode -> useInferPoint mutation, in image-pixel coords.
- * - Drag in "box" mode -> shows a translucent rectangle; on release ->
- *   useInferBox mutation in image-pixel coords.
+ * Stage transform model
+ * ---------------------
+ * The Konva Stage carries the user's view transform (``scale`` + ``panX/Y``).
+ * Inside the stage, the image is drawn at ``(0, 0)`` in its natural pixel size,
+ * and every polygon is drawn at raw image-pixel coordinates. ``stage.getRelative
+ * PointerPosition()`` then returns the cursor *in image-pixel coordinates* with
+ * zero math from us — the cleanest possible coordinate story.
+ *
+ * Interactions
+ * ------------
+ * * Mouse wheel  → zoom toward the cursor (the world point under the cursor
+ *   stays under the cursor).
+ * * Middle-mouse drag, or Shift+drag  → pan.
+ * * Left click in **point** mode → point-prompt at the cursor's image pixel.
+ * * Left drag in **box** mode → box-prompt; the preview rectangle is drawn in
+ *   image-pixel coords and uses ``strokeScaleEnabled={false}`` so the stroke
+ *   stays crisp at any zoom level.
+ * * Image change → automatically re-fit to the container (Reset button does the
+ *   same on demand).
+ *
+ * Resize handling
+ * ---------------
+ * A ``ResizeObserver`` watches the container directly, so the Stage follows
+ * sidebar drags, browser zoom, and any other reflow — not just window resize.
  */
 export function CanvasViewer({
   image,
@@ -41,107 +71,194 @@ export function CanvasViewer({
   const containerRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<Konva.Stage>(null)
   const [stageSize, setStageSize] = useState({ width: 800, height: 600 })
+  const [view, setView] = useState<ViewTransform>({ scale: 1, panX: 0, panY: 0 })
   const [dragBox, setDragBox] = useState<DragBox | null>(null)
-  // Track image/tool changes so we can reset the in-progress drag without an effect.
-  const [prevKey, setPrevKey] = useState<string>(`${image.image_id}/${tool}`)
+  const [panOrigin, setPanOrigin] = useState<{
+    cursorX: number
+    cursorY: number
+    panX: number
+    panY: number
+  } | null>(null)
+  // Track image+tool changes so we can reset transient state without an effect.
+  const [prevImageId, setPrevImageId] = useState<string | null>(null)
+  const [prevTool, setPrevTool] = useState<Tool>(tool)
 
   const imageElement = useImageElement(`/api/images/${image.image_id}/file`)
   const { data: annotations } = useAnnotations(image.image_id)
   const inferPoint = useInferPoint(image.image_id)
   const inferBox = useInferBox(image.image_id)
 
-  // Derive-during-render reset (avoids react-hooks/set-state-in-effect on a
-  // simple prop-change reset).
-  const currentKey = `${image.image_id}/${tool}`
-  if (prevKey !== currentKey) {
-    setPrevKey(currentKey)
+  // ResizeObserver: catches sidebar drags, browser zoom, and any container reflow.
+  useLayoutEffect(() => {
+    const node = containerRef.current
+    if (!node) return
+    const observer = new ResizeObserver(() => {
+      // Async (browser-driven) -> allowed by react-hooks/set-state-in-effect.
+      setStageSize({ width: node.clientWidth, height: node.clientHeight })
+    })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
+
+  // Compute the "fit to container" transform — what Reset returns to.
+  const fitTransform = (): ViewTransform => {
+    if (!imageElement) return { scale: 1, panX: 0, panY: 0 }
+    const scale = Math.min(
+      stageSize.width / imageElement.naturalWidth,
+      stageSize.height / imageElement.naturalHeight,
+    )
+    return {
+      scale,
+      panX: (stageSize.width - imageElement.naturalWidth * scale) / 2,
+      panY: (stageSize.height - imageElement.naturalHeight * scale) / 2,
+    }
+  }
+
+  // Derive-during-render: on image change, snap view to fit; reset drag state.
+  if (prevImageId !== image.image_id && imageElement) {
+    setPrevImageId(image.image_id)
+    setView(fitTransform())
+    setDragBox(null)
+    setPanOrigin(null)
+  }
+  if (prevTool !== tool) {
+    setPrevTool(tool)
     setDragBox(null)
   }
 
-  // Resize stage to fit container. The setState inside `measure` runs
-  // asynchronously (from a window resize event) so the new lint rule allows it.
-  useLayoutEffect(() => {
-    const measure = () => {
-      const node = containerRef.current
-      if (!node) return
-      setStageSize({ width: node.clientWidth, height: node.clientHeight })
-    }
-    measure()
-    window.addEventListener('resize', measure)
-    return () => window.removeEventListener('resize', measure)
-  }, [])
+  // Cursor: pan trumps tool style.
+  const cursorClass =
+    panOrigin !== null
+      ? 'cursor-grabbing'
+      : tool === 'box'
+        ? 'cursor-crosshair'
+        : 'cursor-crosshair'
 
-  // Fit the image into the stage; same scale on both axes (no distortion).
-  const scale = imageElement
-    ? Math.min(
-        stageSize.width / imageElement.naturalWidth,
-        stageSize.height / imageElement.naturalHeight,
-      )
-    : 1
-  const scaledWidth = imageElement ? imageElement.naturalWidth * scale : 0
-  const scaledHeight = imageElement ? imageElement.naturalHeight * scale : 0
-  const offsetX = (stageSize.width - scaledWidth) / 2
-  const offsetY = (stageSize.height - scaledHeight) / 2
+  // ─── interactions ──────────────────────────────────────────────────────
 
-  const toImagePixel = (stageX: number, stageY: number): { x: number; y: number } => {
-    return {
-      x: Math.max(0, (stageX - offsetX) / scale),
-      y: Math.max(0, (stageY - offsetY) / scale),
-    }
+  const handleWheel = (e: KonvaEventObject<WheelEvent>) => {
+    e.evt.preventDefault()
+    const stage = e.target.getStage()
+    if (!stage) return
+    const pointer = stage.getPointerPosition()
+    if (!pointer) return
+    const oldScale = view.scale
+    const worldX = (pointer.x - view.panX) / oldScale
+    const worldY = (pointer.y - view.panY) / oldScale
+    const direction = e.evt.deltaY > 0 ? -1 : 1
+    const newScale = clamp(
+      direction > 0 ? oldScale * ZOOM_FACTOR : oldScale / ZOOM_FACTOR,
+      MIN_SCALE,
+      MAX_SCALE,
+    )
+    setView({
+      scale: newScale,
+      panX: pointer.x - worldX * newScale,
+      panY: pointer.y - worldY * newScale,
+    })
   }
 
+  const isPanModifier = (evt: MouseEvent): boolean => evt.shiftKey || evt.button === 1
+
   const handleMouseDown = (e: KonvaEventObject<MouseEvent>) => {
-    if (tool !== 'box' || !imageElement) return
+    if (!imageElement) return
     const stage = e.target.getStage()
-    const pointer = stage?.getPointerPosition()
-    if (!pointer) return
-    setDragBox({ x1: pointer.x, y1: pointer.y, x2: pointer.x, y2: pointer.y })
+    const screen = stage?.getPointerPosition()
+    if (!screen) return
+
+    if (isPanModifier(e.evt)) {
+      setPanOrigin({ cursorX: screen.x, cursorY: screen.y, panX: view.panX, panY: view.panY })
+      return
+    }
+
+    if (tool === 'box') {
+      const img = stage!.getRelativePointerPosition()
+      if (!img) return
+      setDragBox({ x1: img.x, y1: img.y, x2: img.x, y2: img.y })
+    }
   }
 
   const handleMouseMove = (e: KonvaEventObject<MouseEvent>) => {
-    if (!dragBox || tool !== 'box') return
-    const pointer = e.target.getStage()?.getPointerPosition()
-    if (!pointer) return
-    setDragBox({ ...dragBox, x2: pointer.x, y2: pointer.y })
+    if (panOrigin) {
+      const stage = e.target.getStage()
+      const screen = stage?.getPointerPosition()
+      if (!screen) return
+      setView({
+        ...view,
+        panX: panOrigin.panX + (screen.x - panOrigin.cursorX),
+        panY: panOrigin.panY + (screen.y - panOrigin.cursorY),
+      })
+      return
+    }
+    if (dragBox && tool === 'box') {
+      const img = e.target.getStage()?.getRelativePointerPosition()
+      if (!img) return
+      setDragBox({ ...dragBox, x2: img.x, y2: img.y })
+    }
   }
 
   const handleMouseUp = () => {
-    if (!dragBox || tool !== 'box') return
-    const x1Img = Math.min(dragBox.x1, dragBox.x2)
-    const y1Img = Math.min(dragBox.y1, dragBox.y2)
-    const x2Img = Math.max(dragBox.x1, dragBox.x2)
-    const y2Img = Math.max(dragBox.y1, dragBox.y2)
-    const tl = toImagePixel(x1Img, y1Img)
-    const br = toImagePixel(x2Img, y2Img)
-    const pixelW = br.x - tl.x
-    const pixelH = br.y - tl.y
-    setDragBox(null)
-    if (pixelW < 5 || pixelH < 5) return // too small / mis-click
-    inferBox.mutate({ x1: tl.x, y1: tl.y, x2: br.x, y2: br.y })
+    if (panOrigin) {
+      setPanOrigin(null)
+      return
+    }
+    if (dragBox && tool === 'box') {
+      const x1 = Math.min(dragBox.x1, dragBox.x2)
+      const y1 = Math.min(dragBox.y1, dragBox.y2)
+      const x2 = Math.max(dragBox.x1, dragBox.x2)
+      const y2 = Math.max(dragBox.y1, dragBox.y2)
+      setDragBox(null)
+      if (!imageElement) return
+      if (x2 - x1 < MIN_BOX_PIXELS || y2 - y1 < MIN_BOX_PIXELS) return
+      inferBox.mutate({
+        x1: clamp(x1, 0, imageElement.naturalWidth),
+        y1: clamp(y1, 0, imageElement.naturalHeight),
+        x2: clamp(x2, 0, imageElement.naturalWidth),
+        y2: clamp(y2, 0, imageElement.naturalHeight),
+      })
+    }
   }
 
   const handleClick = (e: KonvaEventObject<MouseEvent>) => {
     if (tool !== 'point' || !imageElement) return
-    // If they clicked a mask (Konva propagates through), let MaskOverlay handle it.
+    // Ignore clicks that started as pans.
+    if (panOrigin !== null) return
+    // Let MaskOverlay handle its own clicks; we only fire when the background was hit.
     if (e.target !== e.currentTarget && e.target.getClassName() !== 'Image') return
-    const pointer = e.target.getStage()?.getPointerPosition()
-    if (!pointer) return
-    const { x, y } = toImagePixel(pointer.x, pointer.y)
-    // Clicking outside the image area is a no-op.
-    if (x <= 0 || y <= 0 || x >= imageElement.naturalWidth || y >= imageElement.naturalHeight)
+    const img = e.target.getStage()?.getRelativePointerPosition()
+    if (!img) return
+    if (
+      img.x < 0 ||
+      img.y < 0 ||
+      img.x >= imageElement.naturalWidth ||
+      img.y >= imageElement.naturalHeight
+    ) {
       return
-    inferPoint.mutate({ x, y, label: 1 })
+    }
+    inferPoint.mutate({ x: img.x, y: img.y, label: 1 })
   }
 
+  // ─── overlay UI: zoom % + Reset + hint ─────────────────────────────────
+
+  const handleReset = () => setView(fitTransform())
+  const handleZoomIn = () =>
+    setView({ ...view, scale: clamp(view.scale * ZOOM_FACTOR, MIN_SCALE, MAX_SCALE) })
+  const handleZoomOut = () =>
+    setView({ ...view, scale: clamp(view.scale / ZOOM_FACTOR, MIN_SCALE, MAX_SCALE) })
+
   const busy = inferPoint.isPending || inferBox.isPending
-  const cursor = tool === 'box' ? 'crosshair' : 'pointer'
 
   return (
-    <div ref={containerRef} className="relative h-full w-full bg-slate-100" style={{ cursor }}>
+    <div ref={containerRef} className={`relative h-full w-full bg-slate-100 ${cursorClass}`}>
       <Stage
         ref={stageRef}
         width={stageSize.width}
         height={stageSize.height}
+        scaleX={view.scale}
+        scaleY={view.scale}
+        x={view.panX}
+        y={view.panY}
+        onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -151,24 +268,20 @@ export function CanvasViewer({
           {imageElement && (
             <KonvaImage
               image={imageElement}
-              x={offsetX}
-              y={offsetY}
-              width={scaledWidth}
-              height={scaledHeight}
+              x={0}
+              y={0}
+              width={imageElement.naturalWidth}
+              height={imageElement.naturalHeight}
               listening
             />
           )}
           {annotations && (
-            // Translate so polygons (image-pixel coords scaled to stage) line up
-            // with the centred image. Children only need to multiply by `scale`.
-            <Group x={offsetX} y={offsetY}>
-              <MaskOverlay
-                annotations={annotations}
-                selectedId={selectedAnnotationId}
-                scale={scale}
-                onSelect={onSelectAnnotation}
-              />
-            </Group>
+            <MaskOverlay
+              annotations={annotations}
+              selectedId={selectedAnnotationId}
+              viewScale={view.scale}
+              onSelect={onSelectAnnotation}
+            />
           )}
           {dragBox && tool === 'box' && (
             <Rect
@@ -176,16 +289,53 @@ export function CanvasViewer({
               y={Math.min(dragBox.y1, dragBox.y2)}
               width={Math.abs(dragBox.x2 - dragBox.x1)}
               height={Math.abs(dragBox.y2 - dragBox.y1)}
-              stroke="rgba(14, 165, 233, 0.9)"
-              strokeWidth={1.5}
+              stroke="rgba(14, 165, 233, 0.95)"
+              strokeWidth={1.5 / view.scale}
               fill="rgba(14, 165, 233, 0.15)"
-              dash={[4, 4]}
+              dash={[6 / view.scale, 6 / view.scale]}
               listening={false}
             />
           )}
         </Layer>
-        {/* Translate the offset so polygons (image-pixel coords) appear at the right place. */}
       </Stage>
+
+      {/* HTML overlay: zoom controls + hint. Outside the Stage so transforms don't touch it. */}
+      <div className="pointer-events-none absolute inset-0">
+        <div className="pointer-events-auto absolute right-3 bottom-3 flex items-center gap-1 rounded-lg bg-white/95 px-2 py-1 text-sm shadow-md ring-1 ring-slate-200">
+          <button
+            type="button"
+            onClick={handleZoomOut}
+            className="grid h-7 w-7 place-items-center rounded text-slate-600 hover:bg-slate-100"
+            title="Zoom out (mouse wheel)"
+          >
+            −
+          </button>
+          <span className="min-w-12 text-center font-mono text-xs text-slate-700">
+            {Math.round(view.scale * 100)}%
+          </span>
+          <button
+            type="button"
+            onClick={handleZoomIn}
+            className="grid h-7 w-7 place-items-center rounded text-slate-600 hover:bg-slate-100"
+            title="Zoom in (mouse wheel)"
+          >
+            +
+          </button>
+          <span className="mx-1 h-4 w-px bg-slate-200" />
+          <button
+            type="button"
+            onClick={handleReset}
+            className="rounded px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+            title="Reset view (fit image)"
+          >
+            Reset
+          </button>
+        </div>
+        <div className="absolute bottom-3 left-3 rounded bg-white/85 px-2 py-1 text-xs text-slate-600 shadow ring-1 ring-slate-200">
+          wheel = zoom · shift-drag or middle-drag = pan
+        </div>
+      </div>
+
       {busy && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-white/40">
           <span className="rounded bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow">
@@ -195,4 +345,8 @@ export function CanvasViewer({
       )}
     </div>
   )
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value))
 }
