@@ -241,13 +241,39 @@ def test_patch_approves_annotation(client: TestClient, png_bytes: bytes) -> None
     assert body["approved"] is True and body["label"] == "tree"
 
 
-def test_patch_rejects_unknown_label(client: TestClient, png_bytes: bytes) -> None:
+def test_patch_accepts_label_outside_project_classes(
+    client: TestClient, png_bytes: bytes
+) -> None:
+    """Any non-empty, reasonable label is accepted - projects gate the UI, not the API."""
     image_id = _upload(client, png_bytes)["image_id"]
     ann = client.post(
         f"/api/images/{image_id}/infer/point", json={"x": 15, "y": 15}
     ).json()[0]
     response = client.patch(
-        f"/api/annotations/{ann['annotation_id']}", json={"label": "alien"}
+        f"/api/annotations/{ann['annotation_id']}", json={"label": "Culvert"}
+    )
+    assert response.status_code == 200
+    assert response.json()["label"] == "culvert"  # normalised lowercase
+
+
+def test_patch_rejects_empty_label(client: TestClient, png_bytes: bytes) -> None:
+    image_id = _upload(client, png_bytes)["image_id"]
+    ann = client.post(
+        f"/api/images/{image_id}/infer/point", json={"x": 15, "y": 15}
+    ).json()[0]
+    response = client.patch(
+        f"/api/annotations/{ann['annotation_id']}", json={"label": "   "}
+    )
+    assert response.status_code == 422
+
+
+def test_patch_rejects_too_long_label(client: TestClient, png_bytes: bytes) -> None:
+    image_id = _upload(client, png_bytes)["image_id"]
+    ann = client.post(
+        f"/api/images/{image_id}/infer/point", json={"x": 15, "y": 15}
+    ).json()[0]
+    response = client.patch(
+        f"/api/annotations/{ann['annotation_id']}", json={"label": "a" * 65}
     )
     assert response.status_code == 422
 
@@ -262,6 +288,33 @@ def test_delete_annotation(client: TestClient, png_bytes: bytes) -> None:
     # Now it's gone.
     not_found = client.delete(f"/api/annotations/{ann['annotation_id']}")
     assert not_found.status_code == 404
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Projects
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_projects_returns_configured_projects(client: TestClient) -> None:
+    projects = client.get("/api/projects").json()
+    # config.yaml ships with three: vegetation, road_defects, infrastructure.
+    assert isinstance(projects, list) and len(projects) >= 3
+    ids = {p["id"] for p in projects}
+    assert {"vegetation", "road_defects", "infrastructure"} <= ids
+
+
+def test_projects_shape(client: TestClient) -> None:
+    projects = client.get("/api/projects").json()
+    veg = next(p for p in projects if p["id"] == "vegetation")
+    assert veg["label"] == "Vegetation"
+    assert "tree" in veg["classes"] and "palm_tree" in veg["classes"]
+    assert "tree" in veg["default_prompts"]
+
+
+def test_projects_road_defects_has_culvert(client: TestClient) -> None:
+    projects = client.get("/api/projects").json()
+    rd = next(p for p in projects if p["id"] == "road_defects")
+    assert "culvert" in rd["classes"]
+    assert "pothole" in rd["classes"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

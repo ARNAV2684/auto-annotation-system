@@ -85,3 +85,11 @@ export interface StatsResponse {
   num_pending: number
   per_class_counts: Record<string, number>
 }
+
+/** A UI preset: named class list + default detection prompts. */
+export interface Project {
+  id: string
+  label: string
+  classes: string[]
+  default_prompts: string[]
+}
