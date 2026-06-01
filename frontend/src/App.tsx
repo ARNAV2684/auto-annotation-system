@@ -3,31 +3,35 @@ import { useDeleteSession, useImages } from './api/hooks'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { ExportDialog } from './components/ExportDialog'
 import { Header } from './components/Header'
+import { useCurrentProject } from './components/useCurrentProject'
 import { ReviewPage } from './pages/ReviewPage'
 import { UploadPage } from './pages/UploadPage'
 
-// Hardcoded for v1; mirrors config.yaml#classes on the backend. A future
-// GET /api/classes route would replace this.
-const CLASSES = ['tree', 'palm_tree', 'shrub']
-
 /**
- * Top-level shell. Owns the navigation (upload <-> review) and modal state
- * (Export dialog, Clear Session confirm).
+ * Top-level shell. Owns:
+ *   - upload <-> review view navigation
+ *   - modal state (Export dialog, Clear Session confirm)
+ *   - currently active Project (persisted to localStorage by useCurrentProject)
  */
 export default function App() {
   const { data: images } = useImages()
   const deleteSession = useDeleteSession()
+  const { current: currentProject, setCurrentId: setProjectId } = useCurrentProject()
   const [view, setView] = useState<'upload' | 'review'>('upload')
   const [exportOpen, setExportOpen] = useState(false)
   const [clearOpen, setClearOpen] = useState(false)
 
   return (
     <div className="flex h-screen min-h-0 w-full min-w-0 flex-col overflow-hidden">
-      <Header onClearSession={() => setClearOpen(true)} />
+      <Header
+        currentProject={currentProject}
+        onProjectChange={setProjectId}
+        onClearSession={() => setClearOpen(true)}
+      />
       <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
         {view === 'review' && (images?.length ?? 0) > 0 ? (
           <ReviewPage
-            classes={CLASSES}
+            project={currentProject}
             onBack={() => setView('upload')}
             onOpenExport={() => setExportOpen(true)}
           />

@@ -24,6 +24,7 @@ import type {
   HealthResponse,
   ImageRecord,
   PointRequest,
+  Project,
   StatsResponse,
 } from './types'
 
@@ -34,6 +35,7 @@ export const qk = {
   images: ['images'] as const,
   annotationsFor: (imageId: string) => ['annotations', imageId] as const,
   stats: ['stats'] as const,
+  projects: ['projects'] as const,
 }
 
 // ─── reads ───────────────────────────────────────────────────────────────
@@ -65,6 +67,15 @@ export function useStats(): UseQueryResult<StatsResponse> {
   return useQuery({
     queryKey: qk.stats,
     queryFn: () => getJson<StatsResponse>('/api/stats'),
+  })
+}
+
+export function useProjects(): UseQueryResult<Project[]> {
+  return useQuery({
+    queryKey: qk.projects,
+    queryFn: () => getJson<Project[]>('/api/projects'),
+    // Projects come from config and rarely change while the app runs.
+    staleTime: 5 * 60 * 1000,
   })
 }
 

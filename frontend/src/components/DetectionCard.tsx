@@ -48,7 +48,7 @@ export function DetectionCard({ annotation, classes, selected, onSelect }: Detec
         >
           {!classes.includes(annotation.label) && (
             <option value="" disabled>
-              {annotation.label || 'choose…'}
+              {annotation.label || 'choose…'} (not in current project)
             </option>
           )}
           {classes.map((cls) => (

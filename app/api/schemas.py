@@ -174,6 +174,30 @@ class StatsResponse(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Projects (UI presets — multiple class lists + default detection prompts)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Project(BaseModel):
+    """A named class-list + default-prompt preset for the annotation UI.
+
+    Projects are pure UI presets — they don't change storage. The same image
+    can carry annotations from multiple projects (a tree mask and a culvert
+    mask). Switching projects only changes which labels the dropdowns show and
+    what default text fills the auto-detect box.
+    """
+
+    id: str = Field(description="Stable URL-safe id, e.g. 'road_defects'.")
+    label: str = Field(description="Human-readable label, e.g. 'Road Defects'.")
+    classes: list[str] = Field(
+        description="Class labels available in the UI dropdown for this project."
+    )
+    default_prompts: list[str] = Field(
+        default_factory=list,
+        description="Text phrases pre-filled in the auto-detect box.",
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Simple acknowledgement
 # ─────────────────────────────────────────────────────────────────────────────
 

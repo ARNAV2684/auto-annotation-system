@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useEmbed, useImages } from '../api/hooks'
+import type { Project } from '../api/types'
 import { AutoDetectPanel } from '../components/AutoDetectPanel'
 import { CanvasViewer, type Tool } from '../components/CanvasViewer'
 import { DetectionList } from '../components/DetectionList'
@@ -7,7 +8,8 @@ import { ImageList } from '../components/ImageList'
 import { ToolPalette } from '../components/ToolPalette'
 
 interface ReviewPageProps {
-  classes: string[]
+  /** Active project (UI preset). null while projects are loading. */
+  project: Project | null
   onBack: () => void
   onOpenExport: () => void
 }
@@ -25,7 +27,8 @@ interface ReviewPageProps {
  * so the first point/box prompt feels instant instead of paying the ~0.5s
  * `set_image` cost on first click.
  */
-export function ReviewPage({ classes, onBack, onOpenExport }: ReviewPageProps) {
+export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
+  const classes = project?.classes ?? []
   const { data: images } = useImages()
   const embed = useEmbed()
   const [currentImageId, setCurrentImageId] = useState<string | null>(null)
@@ -105,7 +108,7 @@ export function ReviewPage({ classes, onBack, onOpenExport }: ReviewPageProps) {
       <aside className="flex min-h-0 min-w-0 flex-col gap-4 border-l border-slate-200 bg-slate-50 p-4">
         {currentImage && (
           <div className="flex-shrink-0">
-            <AutoDetectPanel imageId={currentImage.image_id} />
+            <AutoDetectPanel imageId={currentImage.image_id} project={project} />
           </div>
         )}
         <div className="min-h-0 flex-1">

@@ -50,7 +50,31 @@ detector:
     - tree
     - palm tree
 
-# ─── Class list for the active project (human picks label on approval) ───
+# ─── Annotation projects (Sprint 6.x) ───
+#
+# A "project" is a UI preset: a named set of class labels plus default detection
+# prompts tuned for one kind of work (vegetation survey, road defects, etc.).
+# Switching project in the UI changes which labels the dropdowns offer and what
+# text fills the auto-detect box -- nothing about the data layer changes.
+#
+# Adding a new project = adding a YAML block here. No backend code changes needed.
+projects:
+  - id: vegetation
+    label: Vegetation
+    classes: [tree, palm_tree, shrub]
+    default_prompts: [tree, palm tree]
+  - id: road_defects
+    label: Road Defects
+    classes: [pothole, crack, culvert, patch_repair, lane_marking_fade]
+    default_prompts: [pothole, crack, culvert]
+  - id: infrastructure
+    label: Infrastructure
+    classes: [bridge, traffic_sign, light_pole, electric_pole, building]
+    default_prompts: [traffic sign, light pole, bridge]
+
+# Legacy: the flat ``classes`` key is kept as a fallback so older tests / scripts
+# (and a senior pulling an older config) keep working. The first project's
+# classes are taken when ``projects`` is empty.
 classes:
   - tree
   - palm_tree
