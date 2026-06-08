@@ -349,6 +349,101 @@ def test_delete_session_wipes_everything(client: TestClient, png_bytes: bytes) -
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Bulk annotation actions
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _seed_three_annotations(client: TestClient, png_bytes: bytes) -> tuple[str, list[str]]:
+    """Upload one image and create three annotations on it; return ids."""
+    image_id = _upload(client, png_bytes)["image_id"]
+    ids: list[str] = []
+    for _ in range(3):
+        ann = client.post(
+            f"/api/images/{image_id}/infer/point", json={"x": 15, "y": 15}
+        ).json()[0]
+        ids.append(ann["annotation_id"])
+    return image_id, ids
+
+
+def test_bulk_approve_updates_every_id(client: TestClient, png_bytes: bytes) -> None:
+    image_id, ids = _seed_three_annotations(client, png_bytes)
+    response = client.post(
+        f"/api/images/{image_id}/annotations/bulk",
+        json={"action": "approve", "annotation_ids": ids},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["updated"] == 3 and body["errors"] == []
+    after = client.get(f"/api/images/{image_id}/annotations").json()
+    assert all(row["approved"] is True for row in after)
+
+
+def test_bulk_reject_marks_all_as_false(client: TestClient, png_bytes: bytes) -> None:
+    image_id, ids = _seed_three_annotations(client, png_bytes)
+    body = client.post(
+        f"/api/images/{image_id}/annotations/bulk",
+        json={"action": "reject", "annotation_ids": ids},
+    ).json()
+    assert body["updated"] == 3
+    after = client.get(f"/api/images/{image_id}/annotations").json()
+    assert all(row["approved"] is False for row in after)
+
+
+def test_bulk_delete_removes_annotations(client: TestClient, png_bytes: bytes) -> None:
+    image_id, ids = _seed_three_annotations(client, png_bytes)
+    body = client.post(
+        f"/api/images/{image_id}/annotations/bulk",
+        json={"action": "delete", "annotation_ids": ids[:2]},
+    ).json()
+    assert body["updated"] == 2
+    after = client.get(f"/api/images/{image_id}/annotations").json()
+    assert [row["annotation_id"] for row in after] == [ids[2]]
+
+
+def test_bulk_reports_unknown_ids_in_errors(client: TestClient, png_bytes: bytes) -> None:
+    image_id, ids = _seed_three_annotations(client, png_bytes)
+    response = client.post(
+        f"/api/images/{image_id}/annotations/bulk",
+        json={"action": "approve", "annotation_ids": [ids[0], "ann_does_not_exist"]},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["updated"] == 1
+    assert len(body["errors"]) == 1
+    assert body["errors"][0]["annotation_id"] == "ann_does_not_exist"
+
+
+def test_bulk_rejects_id_belonging_to_other_image(
+    client: TestClient, png_bytes: bytes
+) -> None:
+    image_a, ids_a = _seed_three_annotations(client, png_bytes)
+    image_b = _upload(client, png_bytes, name="b.png")["image_id"]
+    response = client.post(
+        f"/api/images/{image_b}/annotations/bulk",
+        json={"action": "delete", "annotation_ids": [ids_a[0]]},
+    )
+    body = response.json()
+    assert body["updated"] == 0
+    assert body["errors"][0]["reason"] == "annotation does not belong to image"
+
+
+def test_bulk_404s_for_unknown_image(client: TestClient) -> None:
+    response = client.post(
+        "/api/images/img_missing/annotations/bulk",
+        json={"action": "approve", "annotation_ids": ["ann_x"]},
+    )
+    assert response.status_code == 404
+
+
+def test_bulk_rejects_empty_id_list(client: TestClient, png_bytes: bytes) -> None:
+    image_id = _upload(client, png_bytes)["image_id"]
+    response = client.post(
+        f"/api/images/{image_id}/annotations/bulk",
+        json={"action": "approve", "annotation_ids": []},
+    )
+    assert response.status_code == 422
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Export
 # ─────────────────────────────────────────────────────────────────────────────
 

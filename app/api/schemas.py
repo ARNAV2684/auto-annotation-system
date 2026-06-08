@@ -130,6 +130,37 @@ class AnnotationPatch(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Bulk annotation actions
+# ─────────────────────────────────────────────────────────────────────────────
+
+BulkAction = Literal["approve", "reject", "delete"]
+
+
+class BulkAnnotationRequest(BaseModel):
+    """Body for POST /api/images/{id}/annotations/bulk.
+
+    One round-trip to approve, reject, or delete many annotations on a single
+    image. Ids not belonging to ``image_id`` (or that don't exist) are reported
+    back in ``errors`` but do NOT abort the rest of the batch.
+    """
+
+    action: BulkAction = Field(description="One of approve / reject / delete.")
+    annotation_ids: list[str] = Field(
+        min_length=1, description="Annotation ids to act on (must belong to the image)."
+    )
+
+
+class BulkAnnotationError(BaseModel):
+    annotation_id: str
+    reason: str
+
+
+class BulkAnnotationResponse(BaseModel):
+    updated: int = Field(description="Number of annotations successfully changed.")
+    errors: list[BulkAnnotationError] = Field(default_factory=list)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Export
 # ─────────────────────────────────────────────────────────────────────────────
 

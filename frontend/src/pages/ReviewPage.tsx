@@ -1,11 +1,19 @@
-import { useEffect, useState } from 'react'
-import { useEmbed, useImages } from '../api/hooks'
+import { useEffect, useMemo, useState } from 'react'
+import {
+  useAnnotations,
+  useDeleteAnnotation,
+  useEmbed,
+  useImages,
+  usePatchAnnotation,
+} from '../api/hooks'
 import type { Project } from '../api/types'
 import { AutoDetectPanel } from '../components/AutoDetectPanel'
 import { CanvasViewer, type Tool } from '../components/CanvasViewer'
 import { DetectionList } from '../components/DetectionList'
 import { ImageList } from '../components/ImageList'
+import { ShortcutHelpOverlay } from '../components/ShortcutHelpOverlay'
 import { ToolPalette } from '../components/ToolPalette'
+import { useKeyboardShortcuts, type Shortcut } from '../components/useKeyboardShortcuts'
 
 interface ReviewPageProps {
   /** Active project (UI preset). null while projects are loading. */
@@ -34,6 +42,7 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
   const [currentImageId, setCurrentImageId] = useState<string | null>(null)
   const [currentTool, setCurrentTool] = useState<Tool>('point')
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null)
+  const [helpOpen, setHelpOpen] = useState(false)
   // Tracks the previous image id so we can reset selection when it changes
   // (React 19's "derive state during render" pattern - no effect needed).
   const [prevImageId, setPrevImageId] = useState<string | null>(null)
@@ -58,6 +67,125 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
   }, [currentImageId, embedMutate])
 
   const currentImage = images?.find((i) => i.image_id === currentImageId) ?? null
+  const { data: annotations } = useAnnotations(currentImageId)
+  const patch = usePatchAnnotation()
+  const del = useDeleteAnnotation()
+
+  const shortcuts = useMemo<Shortcut[]>(() => {
+    const items = images ?? []
+    const anns = annotations ?? []
+    const currentIdx = items.findIndex((i) => i.image_id === currentImageId)
+    const selectedAnn = anns.find((a) => a.annotation_id === selectedAnnotationId) ?? null
+
+    const stepImage = (delta: number) => {
+      if (items.length === 0 || currentIdx < 0) return
+      const next = (currentIdx + delta + items.length) % items.length
+      setCurrentImageId(items[next].image_id)
+    }
+    const stepAnnotation = (delta: number) => {
+      if (anns.length === 0) return
+      const idx = selectedAnnotationId
+        ? anns.findIndex((a) => a.annotation_id === selectedAnnotationId)
+        : -1
+      const next = idx < 0 ? 0 : (idx + delta + anns.length) % anns.length
+      setSelectedAnnotationId(anns[next].annotation_id)
+    }
+    const setApproved = (approved: boolean | null) => {
+      if (!selectedAnn) return
+      patch.mutate({
+        annotationId: selectedAnn.annotation_id,
+        patch: { approved },
+      })
+    }
+    const deleteSelected = () => {
+      if (!selectedAnn) return
+      del.mutate({
+        annotationId: selectedAnn.annotation_id,
+        imageId: selectedAnn.image_id,
+      })
+      setSelectedAnnotationId(null)
+    }
+
+    return [
+      {
+        combo: 'Shift+?',
+        label: 'Show this help',
+        group: 'General',
+        handler: () => setHelpOpen(true),
+      },
+      {
+        combo: 'Escape',
+        label: 'Clear selection / close overlay',
+        group: 'General',
+        allowInInputs: true,
+        handler: () => setSelectedAnnotationId(null),
+      },
+      {
+        combo: 'Shift+A',
+        label: 'Approve selected detection',
+        group: 'Review',
+        handler: () => setApproved(true),
+      },
+      {
+        combo: 'Shift+R',
+        label: 'Reject selected detection',
+        group: 'Review',
+        handler: () => setApproved(false),
+      },
+      {
+        combo: 'Shift+D',
+        label: 'Delete selected detection',
+        group: 'Review',
+        handler: deleteSelected,
+      },
+      {
+        combo: 'Shift+J',
+        label: 'Next detection',
+        group: 'Review',
+        handler: () => stepAnnotation(1),
+      },
+      {
+        combo: 'Shift+K',
+        label: 'Previous detection',
+        group: 'Review',
+        handler: () => stepAnnotation(-1),
+      },
+      {
+        combo: 'Shift+N',
+        label: 'Next image',
+        group: 'Navigation',
+        handler: () => stepImage(1),
+      },
+      {
+        combo: 'Shift+P',
+        label: 'Previous image',
+        group: 'Navigation',
+        handler: () => stepImage(-1),
+      },
+      {
+        combo: 'Shift+T',
+        label: 'Point (target) tool',
+        group: 'Tools',
+        handler: () => setCurrentTool('point'),
+      },
+      {
+        combo: 'Shift+B',
+        label: 'Box tool',
+        group: 'Tools',
+        handler: () => setCurrentTool('box'),
+      },
+      {
+        combo: 'Shift+E',
+        label: 'Open export dialog',
+        group: 'General',
+        handler: onOpenExport,
+      },
+    ]
+  }, [images, annotations, currentImageId, selectedAnnotationId, patch, del, onOpenExport])
+
+  // Disable global shortcuts while the help overlay is open — it owns its own
+  // dismiss listener so any key closes it instead of triggering a page action.
+  useKeyboardShortcuts(shortcuts, !helpOpen)
 
   return (
     // grid with sensible minimums: at narrow widths the page gets a horizontal
@@ -87,6 +215,14 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
             {currentImage ? currentImage.file_name : 'No image selected'}
           </span>
           <ToolPalette current={currentTool} onChange={setCurrentTool} />
+          <button
+            type="button"
+            onClick={() => setHelpOpen(true)}
+            title="Shortcuts (Shift+?)"
+            className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
+          >
+            ?
+          </button>
         </div>
         <div className="relative min-h-0 flex-1 overflow-hidden">
           {currentImage ? (
@@ -129,6 +265,12 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
           Export annotations →
         </button>
       </aside>
+
+      <ShortcutHelpOverlay
+        open={helpOpen}
+        shortcuts={shortcuts}
+        onClose={() => setHelpOpen(false)}
+      />
     </div>
   )
 }

@@ -93,3 +93,20 @@ export interface Project {
   classes: string[]
   default_prompts: string[]
 }
+
+export type BulkAction = 'approve' | 'reject' | 'delete'
+
+export interface BulkAnnotationRequest {
+  action: BulkAction
+  annotation_ids: string[]
+}
+
+export interface BulkAnnotationError {
+  annotation_id: string
+  reason: string
+}
+
+export interface BulkAnnotationResponse {
+  updated: number
+  errors: BulkAnnotationError[]
+}
