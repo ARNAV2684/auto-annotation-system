@@ -18,6 +18,8 @@ import type {
   AnnotationPatch,
   AutoDetectRequest,
   BoxRequest,
+  BulkAnnotationRequest,
+  BulkAnnotationResponse,
   EmbedResponse,
   ExportRequest,
   ExportResponse,
@@ -164,6 +166,21 @@ export function useDeleteAnnotation(): UseMutationResult<
   return useMutation({
     mutationFn: ({ annotationId }) => deleteJson<void>(`/api/annotations/${annotationId}`),
     onSuccess: (_void, { imageId }) => {
+      qc.invalidateQueries({ queryKey: qk.annotationsFor(imageId) })
+      qc.invalidateQueries({ queryKey: qk.images })
+      qc.invalidateQueries({ queryKey: qk.stats })
+    },
+  })
+}
+
+export function useBulkAnnotations(
+  imageId: string,
+): UseMutationResult<BulkAnnotationResponse, Error, BulkAnnotationRequest> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body) =>
+      postJson<BulkAnnotationResponse>(`/api/images/${imageId}/annotations/bulk`, body),
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.annotationsFor(imageId) })
       qc.invalidateQueries({ queryKey: qk.images })
       qc.invalidateQueries({ queryKey: qk.stats })

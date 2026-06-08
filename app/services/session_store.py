@@ -209,6 +209,53 @@ class SessionStore:
                     return True
         return False
 
+    def bulk_update_annotations(
+        self,
+        image_id: str,
+        annotation_ids: list[str],
+        action: str,
+    ) -> tuple[int, list[tuple[str, str]]]:
+        """Apply one of approve/reject/delete to many annotations atomically.
+
+        Returns ``(updated_count, errors)`` where ``errors`` is a list of
+        ``(annotation_id, reason)`` for ids that didn't belong to ``image_id``
+        or didn't exist. The whole batch is one persist().
+        """
+        if action not in ("approve", "reject", "delete"):
+            raise ValueError(f"Unknown bulk action: {action!r}")
+        wanted = set(annotation_ids)
+        updated = 0
+        errors: list[tuple[str, str]] = []
+        with self._lock:
+            index_by_id = {a.annotation_id: i for i, a in enumerate(self._data.annotations)}
+            for ann_id in annotation_ids:
+                idx = index_by_id.get(ann_id)
+                if idx is None:
+                    errors.append((ann_id, "unknown annotation_id"))
+                    continue
+                row = self._data.annotations[idx]
+                if row.image_id != image_id:
+                    errors.append((ann_id, "annotation does not belong to image"))
+            if action == "delete":
+                kept: list[AnnotationRow] = []
+                for row in self._data.annotations:
+                    if row.annotation_id in wanted and row.image_id == image_id:
+                        if row.mask_path:
+                            (self.dir / row.mask_path).unlink(missing_ok=True)
+                        updated += 1
+                    else:
+                        kept.append(row)
+                self._data.annotations = kept
+            else:
+                target = True if action == "approve" else False
+                for row in self._data.annotations:
+                    if row.annotation_id in wanted and row.image_id == image_id:
+                        row.approved = target
+                        updated += 1
+            if updated or errors:
+                self._persist()
+        return updated, errors
+
     def delete_annotations_for_image(self, image_id: str, source: str | None = None) -> int:
         """Delete every annotation for one image (optionally filtered by ``source``).
 

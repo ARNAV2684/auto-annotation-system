@@ -24,6 +24,9 @@ from app.api.schemas import (
     AnnotationPatch,
     AutoDetectRequest,
     BoxRequest,
+    BulkAnnotationError,
+    BulkAnnotationRequest,
+    BulkAnnotationResponse,
     EmbedResponse,
     ExportRequest,
     ExportResponse,
@@ -338,6 +341,27 @@ def delete_annotation(annotation_id: str, store: StoreDep) -> Response:
             status_code=404, detail=f"Unknown annotation_id: {annotation_id}"
         )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/images/{image_id}/annotations/bulk",
+    response_model=BulkAnnotationResponse,
+)
+def bulk_annotations(
+    image_id: str, body: BulkAnnotationRequest, store: StoreDep
+) -> BulkAnnotationResponse:
+    """Apply approve / reject / delete to many annotations of one image."""
+    if store.get_image(image_id) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown image_id: {image_id}")
+    updated, errors = store.bulk_update_annotations(
+        image_id=image_id,
+        annotation_ids=body.annotation_ids,
+        action=body.action,
+    )
+    return BulkAnnotationResponse(
+        updated=updated,
+        errors=[BulkAnnotationError(annotation_id=aid, reason=msg) for aid, msg in errors],
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
