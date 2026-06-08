@@ -130,6 +130,37 @@ class AnnotationPatch(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Bulk annotation actions
+# ─────────────────────────────────────────────────────────────────────────────
+
+BulkAction = Literal["approve", "reject", "delete"]
+
+
+class BulkAnnotationRequest(BaseModel):
+    """Body for POST /api/images/{id}/annotations/bulk.
+
+    One round-trip to approve, reject, or delete many annotations on a single
+    image. Ids not belonging to ``image_id`` (or that don't exist) are reported
+    back in ``errors`` but do NOT abort the rest of the batch.
+    """
+
+    action: BulkAction = Field(description="One of approve / reject / delete.")
+    annotation_ids: list[str] = Field(
+        min_length=1, description="Annotation ids to act on (must belong to the image)."
+    )
+
+
+class BulkAnnotationError(BaseModel):
+    annotation_id: str
+    reason: str
+
+
+class BulkAnnotationResponse(BaseModel):
+    updated: int = Field(description="Number of annotations successfully changed.")
+    errors: list[BulkAnnotationError] = Field(default_factory=list)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Export
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -171,6 +202,30 @@ class StatsResponse(BaseModel):
     num_rejected: int
     num_pending: int
     per_class_counts: dict[str, int]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Projects (UI presets — multiple class lists + default detection prompts)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Project(BaseModel):
+    """A named class-list + default-prompt preset for the annotation UI.
+
+    Projects are pure UI presets — they don't change storage. The same image
+    can carry annotations from multiple projects (a tree mask and a culvert
+    mask). Switching projects only changes which labels the dropdowns show and
+    what default text fills the auto-detect box.
+    """
+
+    id: str = Field(description="Stable URL-safe id, e.g. 'road_defects'.")
+    label: str = Field(description="Human-readable label, e.g. 'Road Defects'.")
+    classes: list[str] = Field(
+        description="Class labels available in the UI dropdown for this project."
+    )
+    default_prompts: list[str] = Field(
+        default_factory=list,
+        description="Text phrases pre-filled in the auto-detect box.",
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

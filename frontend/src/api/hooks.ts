@@ -18,12 +18,15 @@ import type {
   AnnotationPatch,
   AutoDetectRequest,
   BoxRequest,
+  BulkAnnotationRequest,
+  BulkAnnotationResponse,
   EmbedResponse,
   ExportRequest,
   ExportResponse,
   HealthResponse,
   ImageRecord,
   PointRequest,
+  Project,
   StatsResponse,
 } from './types'
 
@@ -34,6 +37,7 @@ export const qk = {
   images: ['images'] as const,
   annotationsFor: (imageId: string) => ['annotations', imageId] as const,
   stats: ['stats'] as const,
+  projects: ['projects'] as const,
 }
 
 // ─── reads ───────────────────────────────────────────────────────────────
@@ -65,6 +69,15 @@ export function useStats(): UseQueryResult<StatsResponse> {
   return useQuery({
     queryKey: qk.stats,
     queryFn: () => getJson<StatsResponse>('/api/stats'),
+  })
+}
+
+export function useProjects(): UseQueryResult<Project[]> {
+  return useQuery({
+    queryKey: qk.projects,
+    queryFn: () => getJson<Project[]>('/api/projects'),
+    // Projects come from config and rarely change while the app runs.
+    staleTime: 5 * 60 * 1000,
   })
 }
 
@@ -153,6 +166,21 @@ export function useDeleteAnnotation(): UseMutationResult<
   return useMutation({
     mutationFn: ({ annotationId }) => deleteJson<void>(`/api/annotations/${annotationId}`),
     onSuccess: (_void, { imageId }) => {
+      qc.invalidateQueries({ queryKey: qk.annotationsFor(imageId) })
+      qc.invalidateQueries({ queryKey: qk.images })
+      qc.invalidateQueries({ queryKey: qk.stats })
+    },
+  })
+}
+
+export function useBulkAnnotations(
+  imageId: string,
+): UseMutationResult<BulkAnnotationResponse, Error, BulkAnnotationRequest> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body) =>
+      postJson<BulkAnnotationResponse>(`/api/images/${imageId}/annotations/bulk`, body),
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.annotationsFor(imageId) })
       qc.invalidateQueries({ queryKey: qk.images })
       qc.invalidateQueries({ queryKey: qk.stats })

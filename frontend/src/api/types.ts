@@ -85,3 +85,28 @@ export interface StatsResponse {
   num_pending: number
   per_class_counts: Record<string, number>
 }
+
+/** A UI preset: named class list + default detection prompts. */
+export interface Project {
+  id: string
+  label: string
+  classes: string[]
+  default_prompts: string[]
+}
+
+export type BulkAction = 'approve' | 'reject' | 'delete'
+
+export interface BulkAnnotationRequest {
+  action: BulkAction
+  annotation_ids: string[]
+}
+
+export interface BulkAnnotationError {
+  annotation_id: string
+  reason: string
+}
+
+export interface BulkAnnotationResponse {
+  updated: number
+  errors: BulkAnnotationError[]
+}

@@ -24,12 +24,16 @@ from app.api.schemas import (
     AnnotationPatch,
     AutoDetectRequest,
     BoxRequest,
+    BulkAnnotationError,
+    BulkAnnotationRequest,
+    BulkAnnotationResponse,
     EmbedResponse,
     ExportRequest,
     ExportResponse,
     HealthResponse,
     ImageRecord,
     PointRequest,
+    Project,
     StatsResponse,
 )
 from app.services.model_registry import ModelRegistry, get_model_registry
@@ -294,17 +298,25 @@ def list_annotations(image_id: str, store: StoreDep) -> list[Annotation]:
     return [_annotation_from_row(r) for r in store.list_annotations(image_id=image_id)]
 
 
+_MAX_LABEL_LEN = 64
+
+
 @router.patch("/annotations/{annotation_id}", response_model=Annotation)
 def patch_annotation(
     annotation_id: str, body: AnnotationPatch, store: StoreDep
 ) -> Annotation:
+    """Update an annotation. The label is normalised but NOT checked against a
+    fixed class list — projects let the user pick from different lists, so any
+    sensible non-empty label is accepted. The frontend dropdown is the policy.
+    """
     if body.label is not None:
-        classes = load_config().get("classes", [])
         normalised = body.label.strip().lower().replace(" ", "_")
-        if classes and normalised not in classes:
+        if not normalised:
+            raise HTTPException(status_code=422, detail="Label cannot be empty.")
+        if len(normalised) > _MAX_LABEL_LEN:
             raise HTTPException(
                 status_code=422,
-                detail=f"Label {body.label!r} is not in config.classes ({classes}).",
+                detail=f"Label too long (max {_MAX_LABEL_LEN} characters).",
             )
         body.label = normalised
     row = store.update_annotation(
@@ -329,6 +341,27 @@ def delete_annotation(annotation_id: str, store: StoreDep) -> Response:
             status_code=404, detail=f"Unknown annotation_id: {annotation_id}"
         )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/images/{image_id}/annotations/bulk",
+    response_model=BulkAnnotationResponse,
+)
+def bulk_annotations(
+    image_id: str, body: BulkAnnotationRequest, store: StoreDep
+) -> BulkAnnotationResponse:
+    """Apply approve / reject / delete to many annotations of one image."""
+    if store.get_image(image_id) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown image_id: {image_id}")
+    updated, errors = store.bulk_update_annotations(
+        image_id=image_id,
+        annotation_ids=body.annotation_ids,
+        action=body.action,
+    )
+    return BulkAnnotationResponse(
+        updated=updated,
+        errors=[BulkAnnotationError(annotation_id=aid, reason=msg) for aid, msg in errors],
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -427,6 +460,27 @@ def download_export(run_id: str) -> FileResponse:
 # ─────────────────────────────────────────────────────────────────────────────
 # Stats + session admin
 # ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/projects", response_model=list[Project])
+def list_projects() -> list[Project]:
+    """Return the configured projects (UI presets). Falls back to a single
+    "default" project built from the legacy ``classes`` key when ``projects``
+    is empty or missing.
+    """
+    cfg = load_config()
+    raw = cfg.get("projects") or []
+    if raw:
+        return [Project(**entry) for entry in raw]
+    legacy_classes = cfg.get("classes", []) or []
+    return [
+        Project(
+            id="default",
+            label="Default",
+            classes=list(legacy_classes),
+            default_prompts=list(legacy_classes),
+        )
+    ]
+
 
 @router.get("/stats", response_model=StatsResponse)
 def stats(store: StoreDep) -> StatsResponse:
