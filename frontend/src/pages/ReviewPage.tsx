@@ -181,15 +181,7 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
         handler: onOpenExport,
       },
     ]
-  }, [
-    images,
-    annotations,
-    currentImageId,
-    selectedAnnotationId,
-    patch,
-    del,
-    onOpenExport,
-  ])
+  }, [images, annotations, currentImageId, selectedAnnotationId, patch, del, onOpenExport])
 
   // Disable global shortcuts while the help overlay is open — it owns its own
   // dismiss listener so any key closes it instead of triggering a page action.

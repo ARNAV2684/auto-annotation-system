@@ -41,10 +41,7 @@ export function DetectionList({
 
   const items = useMemo(() => annotations ?? [], [annotations])
   const visibleItems = useMemo(
-    () =>
-      items.filter(
-        (a) => matchesStateFilter(a, stateFilter) && a.score * 100 >= minScorePct,
-      ),
+    () => items.filter((a) => matchesStateFilter(a, stateFilter) && a.score * 100 >= minScorePct),
     [items, stateFilter, minScorePct],
   )
 
@@ -52,9 +49,10 @@ export function DetectionList({
     const ids = visibleItems.map((a) => a.annotation_id)
     if (ids.length === 0) return
     if (ids.length > 5) {
-      const verb =
-        action === 'approve' ? 'approve' : action === 'reject' ? 'reject' : 'delete'
-      const ok = window.confirm(`${verb[0].toUpperCase() + verb.slice(1)} ${ids.length} annotations?`)
+      const verb = action === 'approve' ? 'approve' : action === 'reject' ? 'reject' : 'delete'
+      const ok = window.confirm(
+        `${verb[0].toUpperCase() + verb.slice(1)} ${ids.length} annotations?`,
+      )
       if (!ok) return
     }
     bulk.mutate({ action, annotation_ids: ids })

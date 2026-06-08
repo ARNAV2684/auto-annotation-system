@@ -17,11 +17,7 @@ interface ShortcutHelpOverlayProps {
  * the page-wide shortcut bindings should NOT fire — pressing Shift+A to close
  * the overlay must not also approve an annotation underneath.
  */
-export function ShortcutHelpOverlay({
-  open,
-  shortcuts,
-  onClose,
-}: ShortcutHelpOverlayProps) {
+export function ShortcutHelpOverlay({ open, shortcuts, onClose }: ShortcutHelpOverlayProps) {
   useEffect(() => {
     if (!open) return
     const handler = (event: KeyboardEvent) => {
@@ -87,8 +83,8 @@ export function ShortcutHelpOverlay({
         </div>
         <p className="mt-5 text-xs text-slate-500">
           Most shortcuts require <kbd className="font-mono text-slate-700">Shift</kbd> so an
-          accidental keystroke can&apos;t change your work. Shortcuts are ignored while a
-          text field is focused.
+          accidental keystroke can&apos;t change your work. Shortcuts are ignored while a text field
+          is focused.
         </p>
       </div>
     </div>
