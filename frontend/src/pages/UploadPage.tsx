@@ -1,7 +1,9 @@
 import { useState } from 'react'
-import { useUpload } from '../api/hooks'
+import { useUpload, useUploadZip } from '../api/hooks'
 import { ApiError } from '../api/client'
 import { Dropzone } from '../components/Dropzone'
+
+type ZipStatus = null | 'uploading' | { added: number } | { error: string }
 
 interface UploadPageProps {
   imageCount: number
@@ -36,7 +38,20 @@ async function runWithConcurrency<T>(
 /** Drop zone + per-file progress + "Start Review" once any image is uploaded. */
 export function UploadPage({ imageCount, onStartReview }: UploadPageProps) {
   const upload = useUpload()
+  const uploadZip = useUploadZip()
   const [pending, setPending] = useState<UploadProgress[]>([])
+  const [zipStatus, setZipStatus] = useState<ZipStatus>(null)
+
+  const handleZip = async (file: File) => {
+    setZipStatus('uploading')
+    try {
+      const records = await uploadZip.mutateAsync(file)
+      setZipStatus({ added: records.length })
+    } catch (err: unknown) {
+      const message = err instanceof ApiError ? err.detail : 'Zip upload failed'
+      setZipStatus({ error: message })
+    }
+  }
 
   const handleFiles = async (files: File[]) => {
     setPending(files.map((f) => ({ fileName: f.name, status: 'pending' })))
@@ -58,13 +73,28 @@ export function UploadPage({ imageCount, onStartReview }: UploadPageProps) {
     })
   }
 
-  const inFlight = pending.some((r) => r.status === 'pending')
+  const zipBusy = zipStatus === 'uploading'
+  const inFlight = pending.some((r) => r.status === 'pending') || zipBusy
   const numDone = pending.filter((r) => r.status === 'done').length
   const numFailed = pending.filter((r) => r.status === 'failed').length
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
-      <Dropzone onFiles={handleFiles} disabled={inFlight} />
+      <Dropzone onFiles={handleFiles} onZip={handleZip} disabled={inFlight} />
+
+      {zipStatus !== null && (
+        <div className="mt-4 rounded border border-slate-200 bg-white p-3 text-sm shadow-sm">
+          {zipStatus === 'uploading' && <span className="text-slate-600">Extracting zip…</span>}
+          {typeof zipStatus === 'object' && 'added' in zipStatus && (
+            <span className="font-medium text-emerald-600">
+              ✓ Added {zipStatus.added} image{zipStatus.added === 1 ? '' : 's'} from the zip.
+            </span>
+          )}
+          {typeof zipStatus === 'object' && 'error' in zipStatus && (
+            <span className="font-medium text-red-600">✗ {zipStatus.error}</span>
+          )}
+        </div>
+      )}
 
       {pending.length > 0 && (
         <div className="mt-8 rounded border border-slate-200 bg-white p-4 shadow-sm">

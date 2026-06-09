@@ -1,33 +1,26 @@
-import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from 'react'
+import { useRef, useState, type ChangeEvent, type DragEvent } from 'react'
 
 interface DropzoneProps {
   onFiles: (files: File[]) => void
+  /** Called with a chosen .zip archive (extracted server-side). */
+  onZip?: (file: File) => void
   disabled?: boolean
   accept?: string
 }
 
 const SUPPORTED_EXTS = ['.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.webp']
 
-/** Drag-and-drop + click-to-browse area for image uploads, plus a whole-folder picker. */
+/** Drag-and-drop + click-to-browse for images, plus folder and .zip pickers. */
 export function Dropzone({
   onFiles,
+  onZip,
   disabled = false,
   accept = SUPPORTED_EXTS.join(','),
 }: DropzoneProps) {
   const [isDragging, setIsDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
-
-  // `webkitdirectory` / `directory` aren't in React's input typings, so set them
-  // on the DOM node directly. With them present, the picker selects a folder and
-  // returns every file inside (we filter to images in `handle`).
-  useEffect(() => {
-    const node = folderInputRef.current
-    if (node) {
-      node.setAttribute('webkitdirectory', '')
-      node.setAttribute('directory', '')
-    }
-  }, [])
+  const zipInputRef = useRef<HTMLInputElement>(null)
 
   const handle = (files: FileList | null) => {
     if (!files) return
@@ -58,6 +51,12 @@ export function Dropzone({
 
   const onChange = (e: ChangeEvent<HTMLInputElement>) => {
     handle(e.target.files)
+    e.target.value = ''
+  }
+
+  const onZipChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file && onZip) onZip(file)
     e.target.value = ''
   }
 
@@ -103,7 +102,7 @@ export function Dropzone({
         <span className="mt-1 text-sm text-slate-500">JPG · PNG · TIFF · WebP</span>
       </label>
 
-      <div className="mt-3 flex items-center justify-center gap-2 text-sm text-slate-500">
+      <div className="mt-3 flex flex-wrap items-center justify-center gap-2 text-sm text-slate-500">
         <span>or</span>
         <button
           type="button"
@@ -111,15 +110,39 @@ export function Dropzone({
           onClick={() => folderInputRef.current?.click()}
           className="rounded border border-slate-300 px-3 py-1 font-medium text-slate-700 transition hover:border-sky-400 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Select a whole folder
+          Select a folder
         </button>
+        {onZip && (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => zipInputRef.current?.click()}
+            className="rounded border border-slate-300 px-3 py-1 font-medium text-slate-700 transition hover:border-sky-400 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Upload a .zip
+          </button>
+        )}
       </div>
+      <p className="mt-1 text-center text-xs text-slate-400">
+        Folder picker depends on your browser — if it doesn&apos;t work, zip the folder and use
+        “Upload a .zip”.
+      </p>
       <input
         ref={folderInputRef}
         type="file"
         multiple
+        webkitdirectory=""
+        directory=""
         disabled={disabled}
         onChange={onChange}
+        className="hidden"
+      />
+      <input
+        ref={zipInputRef}
+        type="file"
+        accept=".zip,application/zip"
+        disabled={disabled}
+        onChange={onZipChange}
         className="hidden"
       />
     </div>

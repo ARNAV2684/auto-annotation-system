@@ -3,7 +3,7 @@ import type { KonvaEventObject } from 'konva/lib/Node'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Circle, Image as KonvaImage, Layer, Line, Rect, Stage } from 'react-konva'
 import { useAnnotations, useCreatePolygon, useInferBox, useInferPoint } from '../api/hooks'
-import type { ImageRecord, PointSpec, Polygon } from '../api/types'
+import type { Annotation, ImageRecord, PointSpec, Polygon } from '../api/types'
 import { MaskOverlay } from './MaskOverlay'
 import { useImageElement } from './useImageElement'
 
@@ -19,6 +19,8 @@ interface CanvasViewerProps {
   onAddSmartPoint?: (point: PointSpec) => void
   /** Polygon simplification tolerance for the Smart Select preview. */
   simplify?: number
+  /** Fired with newly-created annotations so the parent can record undo history. */
+  onAnnotationsCreated?: (created: Annotation[]) => void
 }
 
 interface DragBox {
@@ -75,6 +77,7 @@ export function CanvasViewer({
   smartPoints = [],
   onAddSmartPoint,
   simplify,
+  onAnnotationsCreated,
 }: CanvasViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<Konva.Stage>(null)
@@ -152,7 +155,12 @@ export function CanvasViewer({
         e.preventDefault()
         createPolygonMutate(
           { points: polygonPoints.map((p) => [p.x, p.y]) },
-          { onSuccess: () => setPolygonPoints([]) },
+          {
+            onSuccess: (ann) => {
+              setPolygonPoints([])
+              onAnnotationsCreated?.([ann])
+            },
+          },
         )
       } else if (e.key === 'Escape') {
         e.preventDefault()
@@ -161,7 +169,7 @@ export function CanvasViewer({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [tool, polygonPoints, createPolygonMutate])
+  }, [tool, polygonPoints, createPolygonMutate, onAnnotationsCreated])
 
   // ResizeObserver: catches sidebar drags, browser zoom, and any container reflow.
   useLayoutEffect(() => {
@@ -317,12 +325,15 @@ export function CanvasViewer({
       setDragBox(null)
       if (!imageElement) return
       if (x2 - x1 < MIN_BOX_PIXELS || y2 - y1 < MIN_BOX_PIXELS) return
-      inferBox.mutate({
-        x1: clamp(x1, 0, imageElement.naturalWidth),
-        y1: clamp(y1, 0, imageElement.naturalHeight),
-        x2: clamp(x2, 0, imageElement.naturalWidth),
-        y2: clamp(y2, 0, imageElement.naturalHeight),
-      })
+      inferBox.mutate(
+        {
+          x1: clamp(x1, 0, imageElement.naturalWidth),
+          y1: clamp(y1, 0, imageElement.naturalHeight),
+          x2: clamp(x2, 0, imageElement.naturalWidth),
+          y2: clamp(y2, 0, imageElement.naturalHeight),
+        },
+        { onSuccess: (ann) => onAnnotationsCreated?.([ann]) },
+      )
     }
   }
 
@@ -353,7 +364,10 @@ export function CanvasViewer({
     if (tool === 'point') {
       // Let MaskOverlay handle its own clicks; only fire on a background hit.
       if (e.target !== e.currentTarget && e.target.getClassName() !== 'Image') return
-      inferPoint.mutate({ x: img.x, y: img.y, label: 1 })
+      inferPoint.mutate(
+        { x: img.x, y: img.y, label: 1 },
+        { onSuccess: (anns) => onAnnotationsCreated?.(anns) },
+      )
     }
   }
 
@@ -362,7 +376,12 @@ export function CanvasViewer({
     if (tool === 'polygon' && polygonPoints.length >= 3) {
       createPolygon.mutate(
         { points: polygonPoints.map((p) => [p.x, p.y]) },
-        { onSuccess: () => setPolygonPoints([]) },
+        {
+          onSuccess: (ann) => {
+            setPolygonPoints([])
+            onAnnotationsCreated?.([ann])
+          },
+        },
       )
     }
   }
