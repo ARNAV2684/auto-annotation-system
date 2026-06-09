@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { useDeleteAnnotation, usePatchAnnotation } from '../api/hooks'
 import type { Annotation } from '../api/types'
 import { InlineClassPopup } from './InlineClassPopup'
 
@@ -10,22 +9,27 @@ interface DetectionCardProps {
   classes: string[]
   selected: boolean
   onSelect: () => void
+  /** Review actions are routed up so the parent can record undo/redo history. */
+  onSetApproved: (approved: boolean | null) => void
+  onSetLabel: (label: string) => void
+  onDelete: () => void
 }
 
 /** One row in the detections panel: source/score, approve/reject/delete, label dropdown. */
-export function DetectionCard({ annotation, classes, selected, onSelect }: DetectionCardProps) {
-  const patch = usePatchAnnotation()
-  const del = useDeleteAnnotation()
+export function DetectionCard({
+  annotation,
+  classes,
+  selected,
+  onSelect,
+  onSetApproved,
+  onSetLabel,
+  onDelete,
+}: DetectionCardProps) {
   const [popupOpen, setPopupOpen] = useState(false)
 
-  const setApproved = (approved: boolean | null) =>
-    patch.mutate({ annotationId: annotation.annotation_id, patch: { approved } })
-
-  const setLabel = (label: string) =>
-    patch.mutate({ annotationId: annotation.annotation_id, patch: { label } })
-
-  const remove = () =>
-    del.mutate({ annotationId: annotation.annotation_id, imageId: annotation.image_id })
+  const setApproved = (approved: boolean | null) => onSetApproved(approved)
+  const setLabel = (label: string) => onSetLabel(label)
+  const remove = () => onDelete()
 
   const stateClasses =
     annotation.approved === true
@@ -118,6 +122,7 @@ export function DetectionCard({ annotation, classes, selected, onSelect }: Detec
 function labelForSource(source: Annotation['source']): string {
   if (source === 'auto') return 'auto-detect'
   if (source === 'point') return 'point click'
+  if (source === 'polygon') return 'manual polygon'
   return 'box drag'
 }
 

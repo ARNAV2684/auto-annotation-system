@@ -8,6 +8,10 @@ interface DetectionListProps {
   classes: string[]
   selectedAnnotationId: string | null
   onSelectAnnotation: (id: string) => void
+  /** Per-annotation review actions, routed up so the parent records history. */
+  onSetApproved: (annotation: Annotation, approved: boolean | null) => void
+  onSetLabel: (annotation: Annotation, label: string) => void
+  onDelete: (annotation: Annotation) => void
 }
 
 type StateFilter = 'all' | 'pending' | 'approved' | 'rejected'
@@ -32,6 +36,9 @@ export function DetectionList({
   classes,
   selectedAnnotationId,
   onSelectAnnotation,
+  onSetApproved,
+  onSetLabel,
+  onDelete,
 }: DetectionListProps) {
   const { data: annotations, isLoading } = useAnnotations(imageId)
   const bulk = useBulkAnnotations(imageId)
@@ -147,6 +154,9 @@ export function DetectionList({
               classes={classes}
               selected={ann.annotation_id === selectedAnnotationId}
               onSelect={() => onSelectAnnotation(ann.annotation_id)}
+              onSetApproved={(approved) => onSetApproved(ann, approved)}
+              onSetLabel={(label) => onSetLabel(ann, label)}
+              onDelete={() => onDelete(ann)}
             />
           ))}
         </ul>

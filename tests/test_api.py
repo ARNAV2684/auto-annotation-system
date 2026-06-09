@@ -303,6 +303,50 @@ def test_preview_rejects_empty_points(client: TestClient, png_bytes: bytes) -> N
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Manual polygon + Repeat previous (PR T)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_create_polygon_persists_annotation(client: TestClient, png_bytes: bytes) -> None:
+    image_id = _upload(client, png_bytes)["image_id"]
+    response = client.post(
+        f"/api/images/{image_id}/annotations/polygon",
+        json={"points": [[5, 5], [30, 5], [30, 30], [5, 30]], "label": "House"},
+    )
+    assert response.status_code == 201
+    ann = response.json()
+    assert ann["source"] == "polygon"
+    assert ann["label"] == "house"  # normalised
+    assert ann["polygon"] and len(ann["polygon"][0]) >= 6
+
+
+def test_create_polygon_rejects_too_few_points(client: TestClient, png_bytes: bytes) -> None:
+    image_id = _upload(client, png_bytes)["image_id"]
+    response = client.post(
+        f"/api/images/{image_id}/annotations/polygon", json={"points": [[5, 5], [10, 10]]}
+    )
+    assert response.status_code == 422
+
+
+def test_copy_annotations_clones_to_target(client: TestClient, png_bytes: bytes) -> None:
+    src = _upload(client, png_bytes, name="a.png")["image_id"]
+    dst = _upload(client, png_bytes, name="b.png")["image_id"]
+    client.post(f"/api/images/{src}/infer/point", json={"x": 15, "y": 15})
+    client.post(f"/api/images/{src}/infer/point", json={"x": 20, "y": 20})
+    copied = client.post(f"/api/images/{dst}/annotations/copy-from/{src}").json()
+    assert len(copied) == 2
+    assert all(c["image_id"] == dst for c in copied)
+    # The destination now has its own independent copies.
+    assert len(client.get(f"/api/images/{dst}/annotations").json()) == 2
+
+
+def test_copy_annotations_unknown_source_404(client: TestClient, png_bytes: bytes) -> None:
+    dst = _upload(client, png_bytes)["image_id"]
+    assert (
+        client.post(f"/api/images/{dst}/annotations/copy-from/nope").status_code == 404
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Annotation CRUD
 # ─────────────────────────────────────────────────────────────────────────────
 

@@ -30,6 +30,7 @@ import type {
   ImageRecord,
   MultiPointRequest,
   PointRequest,
+  PolygonRequest,
   Project,
   StatsResponse,
 } from './types'
@@ -148,6 +149,35 @@ export function useInferPoints(
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (body) => postJson<Annotation[]>(`/api/images/${imageId}/infer/points`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.annotationsFor(imageId) })
+      qc.invalidateQueries({ queryKey: qk.images })
+      qc.invalidateQueries({ queryKey: qk.stats })
+    },
+  })
+}
+
+export function useCreatePolygon(
+  imageId: string,
+): UseMutationResult<Annotation, Error, PolygonRequest> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body) => postJson<Annotation>(`/api/images/${imageId}/annotations/polygon`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.annotationsFor(imageId) })
+      qc.invalidateQueries({ queryKey: qk.images })
+      qc.invalidateQueries({ queryKey: qk.stats })
+    },
+  })
+}
+
+export function useCopyAnnotations(
+  imageId: string,
+): UseMutationResult<Annotation[], Error, string> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (sourceId) =>
+      postJson<Annotation[]>(`/api/images/${imageId}/annotations/copy-from/${sourceId}`, {}),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.annotationsFor(imageId) })
       qc.invalidateQueries({ queryKey: qk.images })
