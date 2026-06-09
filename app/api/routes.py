@@ -33,6 +33,7 @@ from app.api.schemas import (
     ExportRequest,
     ExportResponse,
     HealthResponse,
+    ImagePatch,
     ImageRecord,
     MultiPointRequest,
     PointRequest,
@@ -125,6 +126,7 @@ def _image_record(image: ImageRow, num_detections: int, num_approved: int) -> Im
         height=image.height,
         num_detections=num_detections,
         num_approved=num_approved,
+        done=image.done,
     )
 
 
@@ -231,6 +233,16 @@ def list_images(store: StoreDep) -> list[ImageRecord]:
         total, approved = _counts_for_image(store, image.image_id)
         out.append(_image_record(image, total, approved))
     return out
+
+
+@router.patch("/images/{image_id}", response_model=ImageRecord)
+def patch_image(image_id: str, body: ImagePatch, store: StoreDep) -> ImageRecord:
+    """Update image-level fields — currently the 'done / reviewed' flag."""
+    row = store.update_image(image_id, done=body.done)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Unknown image_id: {image_id}")
+    total, approved = _counts_for_image(store, image_id)
+    return _image_record(row, total, approved)
 
 
 @router.get("/images/{image_id}/file")

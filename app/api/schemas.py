@@ -42,6 +42,13 @@ class ImageRecord(BaseModel):
     height: int
     num_detections: int = 0
     num_approved: int = 0
+    done: bool = False
+
+
+class ImagePatch(BaseModel):
+    """Body for PATCH /api/images/{id}."""
+
+    done: bool | None = None
 
 
 class EmbedResponse(BaseModel):

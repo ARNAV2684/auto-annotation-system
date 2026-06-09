@@ -175,6 +175,23 @@ def test_get_image_file_returns_bytes(client: TestClient, png_bytes: bytes) -> N
     assert response.headers["content-type"].startswith("image/")
 
 
+def test_patch_image_marks_done(client: TestClient, png_bytes: bytes) -> None:
+    image_id = _upload(client, png_bytes)["image_id"]
+    assert _upload_done_state(client, image_id) is False
+    body = client.patch(f"/api/images/{image_id}", json={"done": True}).json()
+    assert body["done"] is True
+    assert _upload_done_state(client, image_id) is True
+
+
+def test_patch_image_unknown_404(client: TestClient) -> None:
+    assert client.patch("/api/images/nope", json={"done": True}).status_code == 404
+
+
+def _upload_done_state(client: TestClient, image_id: str) -> bool:
+    record = next(r for r in client.get("/api/images").json() if r["image_id"] == image_id)
+    return record["done"]
+
+
 def test_embed_endpoint_reports_cache_state(client: TestClient, png_bytes: bytes) -> None:
     image_id = _upload(client, png_bytes)["image_id"]
     first = client.post(f"/api/images/{image_id}/embed").json()
