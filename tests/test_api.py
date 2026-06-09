@@ -187,6 +187,14 @@ def test_patch_image_unknown_404(client: TestClient) -> None:
     assert client.patch("/api/images/nope", json={"done": True}).status_code == 404
 
 
+def test_patch_image_sets_tags_deduped(client: TestClient, png_bytes: bytes) -> None:
+    image_id = _upload(client, png_bytes)["image_id"]
+    body = client.patch(
+        f"/api/images/{image_id}", json={"tags": ["blurry", "blurry", " urban ", ""]}
+    ).json()
+    assert body["tags"] == ["blurry", "urban"]  # deduped, trimmed, blanks dropped
+
+
 def _upload_done_state(client: TestClient, image_id: str) -> bool:
     record = next(r for r in client.get("/api/images").json() if r["image_id"] == image_id)
     return record["done"]

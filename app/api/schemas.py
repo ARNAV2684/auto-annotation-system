@@ -43,12 +43,14 @@ class ImageRecord(BaseModel):
     num_detections: int = 0
     num_approved: int = 0
     done: bool = False
+    tags: list[str] = Field(default_factory=list)
 
 
 class ImagePatch(BaseModel):
-    """Body for PATCH /api/images/{id}."""
+    """Body for PATCH /api/images/{id}. All fields optional."""
 
     done: bool | None = None
+    tags: list[str] | None = None
 
 
 class EmbedResponse(BaseModel):

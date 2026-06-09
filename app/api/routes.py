@@ -127,6 +127,7 @@ def _image_record(image: ImageRow, num_detections: int, num_approved: int) -> Im
         num_detections=num_detections,
         num_approved=num_approved,
         done=image.done,
+        tags=list(image.tags),
     )
 
 
@@ -238,7 +239,7 @@ def list_images(store: StoreDep) -> list[ImageRecord]:
 @router.patch("/images/{image_id}", response_model=ImageRecord)
 def patch_image(image_id: str, body: ImagePatch, store: StoreDep) -> ImageRecord:
     """Update image-level fields — currently the 'done / reviewed' flag."""
-    row = store.update_image(image_id, done=body.done)
+    row = store.update_image(image_id, done=body.done, tags=body.tags)
     if row is None:
         raise HTTPException(status_code=404, detail=f"Unknown image_id: {image_id}")
     total, approved = _counts_for_image(store, image_id)
