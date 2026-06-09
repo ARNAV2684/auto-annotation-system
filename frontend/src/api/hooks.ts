@@ -14,12 +14,14 @@ import {
 } from '@tanstack/react-query'
 import { deleteJson, getJson, patchJson, postFile, postJson } from './client'
 import type {
+  AddClassRequest,
   Annotation,
   AnnotationPatch,
   AutoDetectRequest,
   BoxRequest,
   BulkAnnotationRequest,
   BulkAnnotationResponse,
+  CreateProjectRequest,
   EmbedResponse,
   ExportRequest,
   ExportResponse,
@@ -78,6 +80,22 @@ export function useProjects(): UseQueryResult<Project[]> {
     queryFn: () => getJson<Project[]>('/api/projects'),
     // Projects come from config and rarely change while the app runs.
     staleTime: 5 * 60 * 1000,
+  })
+}
+
+export function useCreateProject(): UseMutationResult<Project, Error, CreateProjectRequest> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body) => postJson<Project>('/api/projects', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.projects }),
+  })
+}
+
+export function useAddClass(projectId: string): UseMutationResult<Project, Error, AddClassRequest> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body) => postJson<Project>(`/api/projects/${projectId}/classes`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.projects }),
   })
 }
 
