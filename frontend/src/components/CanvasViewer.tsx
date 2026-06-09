@@ -1,7 +1,7 @@
 import type Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import { useLayoutEffect, useRef, useState } from 'react'
-import { Image as KonvaImage, Layer, Rect, Stage } from 'react-konva'
+import { Image as KonvaImage, Layer, Line, Rect, Stage } from 'react-konva'
 import { useAnnotations, useInferBox, useInferPoint } from '../api/hooks'
 import type { ImageRecord } from '../api/types'
 import { MaskOverlay } from './MaskOverlay'
@@ -73,6 +73,10 @@ export function CanvasViewer({
   const [stageSize, setStageSize] = useState({ width: 800, height: 600 })
   const [view, setView] = useState<ViewTransform>({ scale: 1, panX: 0, panY: 0 })
   const [dragBox, setDragBox] = useState<DragBox | null>(null)
+  // Cursor in image-pixel coords (for the crosshair guides) and the annotation
+  // currently under the cursor (for hover highlight).
+  const [cursorImg, setCursorImg] = useState<{ x: number; y: number } | null>(null)
+  const [hoveredId, setHoveredId] = useState<string | null>(null)
   const [panOrigin, setPanOrigin] = useState<{
     cursorX: number
     cursorY: number
@@ -120,6 +124,8 @@ export function CanvasViewer({
     setView(fitTransform())
     setDragBox(null)
     setPanOrigin(null)
+    setHoveredId(null)
+    setCursorImg(null)
   }
   if (prevTool !== tool) {
     setPrevTool(tool)
@@ -179,8 +185,11 @@ export function CanvasViewer({
   }
 
   const handleMouseMove = (e: KonvaEventObject<MouseEvent>) => {
+    const stage = e.target.getStage()
+    const img = stage?.getRelativePointerPosition()
+    if (img) setCursorImg({ x: img.x, y: img.y })
+
     if (panOrigin) {
-      const stage = e.target.getStage()
       const screen = stage?.getPointerPosition()
       if (!screen) return
       setView({
@@ -191,11 +200,13 @@ export function CanvasViewer({
       return
     }
     if (dragBox && tool === 'box') {
-      const img = e.target.getStage()?.getRelativePointerPosition()
       if (!img) return
       setDragBox({ ...dragBox, x2: img.x, y2: img.y })
     }
   }
+
+  // Clear the crosshair when the cursor leaves the canvas entirely.
+  const handleMouseLeave = () => setCursorImg(null)
 
   const handleMouseUp = () => {
     if (panOrigin) {
@@ -248,6 +259,19 @@ export function CanvasViewer({
 
   const busy = inferPoint.isPending || inferBox.isPending
 
+  // Crosshair guides follow the cursor while it is over the image and we are not
+  // mid-pan, so the user can line up a click/box precisely.
+  const imgW = imageElement?.naturalWidth ?? 0
+  const imgH = imageElement?.naturalHeight ?? 0
+  const showCrosshair =
+    !!imageElement &&
+    !!cursorImg &&
+    !panOrigin &&
+    cursorImg.x >= 0 &&
+    cursorImg.x <= imgW &&
+    cursorImg.y >= 0 &&
+    cursorImg.y <= imgH
+
   return (
     <div ref={containerRef} className={`relative h-full w-full bg-slate-100 ${cursorClass}`}>
       <Stage
@@ -262,6 +286,7 @@ export function CanvasViewer({
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseLeave}
         onClick={handleClick}
       >
         <Layer>
@@ -279,8 +304,9 @@ export function CanvasViewer({
             <MaskOverlay
               annotations={annotations}
               selectedId={selectedAnnotationId}
-              viewScale={view.scale}
+              hoveredId={hoveredId}
               onSelect={onSelectAnnotation}
+              onHover={setHoveredId}
             />
           )}
           {dragBox && tool === 'box' && (
@@ -295,6 +321,26 @@ export function CanvasViewer({
               dash={[6 / view.scale, 6 / view.scale]}
               listening={false}
             />
+          )}
+          {showCrosshair && cursorImg && (
+            <>
+              <Line
+                points={[cursorImg.x, 0, cursorImg.x, imgH]}
+                stroke="rgba(14, 165, 233, 0.5)"
+                strokeWidth={1}
+                dash={[4, 4]}
+                strokeScaleEnabled={false}
+                listening={false}
+              />
+              <Line
+                points={[0, cursorImg.y, imgW, cursorImg.y]}
+                stroke="rgba(14, 165, 233, 0.5)"
+                strokeWidth={1}
+                dash={[4, 4]}
+                strokeScaleEnabled={false}
+                listening={false}
+              />
+            </>
           )}
         </Layer>
       </Stage>
