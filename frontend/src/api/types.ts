@@ -20,6 +20,11 @@ export interface ImageRecord {
   height: number
   num_detections: number
   num_approved: number
+  done: boolean
+}
+
+export interface ImagePatch {
+  done?: boolean
 }
 
 export interface EmbedResponse {

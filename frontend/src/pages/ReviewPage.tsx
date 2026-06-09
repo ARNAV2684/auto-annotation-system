@@ -6,6 +6,7 @@ import {
   useImages,
   useInferPoints,
   usePatchAnnotation,
+  usePatchImage,
 } from '../api/hooks'
 import type { PointSpec, Project } from '../api/types'
 import { AutoDetectPanel } from '../components/AutoDetectPanel'
@@ -15,6 +16,7 @@ import { ImageList } from '../components/ImageList'
 import { ShortcutHelpOverlay } from '../components/ShortcutHelpOverlay'
 import { SmartSelectPanel } from '../components/SmartSelectPanel'
 import { ToolPalette } from '../components/ToolPalette'
+import { TopBar } from '../components/TopBar'
 import { useKeyboardShortcuts, type Shortcut } from '../components/useKeyboardShortcuts'
 
 interface ReviewPageProps {
@@ -45,6 +47,7 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
   const [currentTool, setCurrentTool] = useState<Tool>('point')
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
+  const [trainOpen, setTrainOpen] = useState(false)
   // Smart Select state, owned here so the canvas and the side panel share it.
   const [smartPoints, setSmartPoints] = useState<PointSpec[]>([])
   const [simplify, setSimplify] = useState(2)
@@ -111,6 +114,19 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
   const { data: annotations } = useAnnotations(currentImageId)
   const patch = usePatchAnnotation()
   const del = useDeleteAnnotation()
+  const patchImage = usePatchImage(currentImageId ?? '')
+
+  // Image navigator (also used by the Shift+N/P shortcuts).
+  const imageList = images ?? []
+  const currentIndex = imageList.findIndex((i) => i.image_id === currentImageId)
+  const goToImage = (delta: number) => {
+    if (imageList.length === 0 || currentIndex < 0) return
+    const next = (currentIndex + delta + imageList.length) % imageList.length
+    setCurrentImageId(imageList[next].image_id)
+  }
+  const toggleDone = () => {
+    if (currentImage) patchImage.mutate({ done: !currentImage.done })
+  }
 
   const shortcuts = useMemo<Shortcut[]>(() => {
     const items = images ?? []
@@ -257,16 +273,24 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
 
       {/* Centre: canvas + tool palette */}
       <section className="relative flex min-h-0 min-w-0 flex-col bg-slate-100">
-        <div className="flex flex-shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-2">
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-700">
-            {currentImage ? currentImage.file_name : 'No image selected'}
-          </span>
+        <div className="flex flex-shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-4 py-2">
+          <TopBar
+            projectLabel={project?.label ?? null}
+            fileName={currentImage?.file_name ?? null}
+            index={currentIndex}
+            total={imageList.length}
+            done={currentImage?.done ?? false}
+            onPrev={() => goToImage(-1)}
+            onNext={() => goToImage(1)}
+            onToggleDone={toggleDone}
+            onTrain={() => setTrainOpen(true)}
+          />
           <ToolPalette current={currentTool} onChange={setCurrentTool} />
           <button
             type="button"
             onClick={() => setHelpOpen(true)}
             title="Shortcuts (Shift+?)"
-            className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
+            className="flex-shrink-0 rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
           >
             ?
           </button>
@@ -333,6 +357,33 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
         shortcuts={shortcuts}
         onClose={() => setHelpOpen(false)}
       />
+
+      {trainOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+          onClick={() => setTrainOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-[26rem] rounded-lg bg-white p-6 shadow-xl"
+          >
+            <h2 className="text-lg font-semibold text-slate-900">Train a model</h2>
+            <p className="mt-2 text-sm text-slate-600">
+              Custom model training runs on your approved annotations and lands in the next sprint.
+              For now, keep labeling and approving — those become the training set.
+            </p>
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setTrainOpen(false)}
+                className="rounded bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
+              >
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

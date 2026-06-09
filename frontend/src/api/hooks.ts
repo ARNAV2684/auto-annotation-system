@@ -26,6 +26,7 @@ import type {
   ExportRequest,
   ExportResponse,
   HealthResponse,
+  ImagePatch,
   ImageRecord,
   MultiPointRequest,
   PointRequest,
@@ -110,6 +111,14 @@ export function useUpload(): UseMutationResult<ImageRecord, Error, File> {
       qc.invalidateQueries({ queryKey: qk.images })
       qc.invalidateQueries({ queryKey: qk.stats })
     },
+  })
+}
+
+export function usePatchImage(imageId: string): UseMutationResult<ImageRecord, Error, ImagePatch> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body) => patchJson<ImageRecord>(`/api/images/${imageId}`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.images }),
   })
 }
 
