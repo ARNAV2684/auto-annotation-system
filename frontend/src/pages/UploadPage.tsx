@@ -14,6 +14,25 @@ interface UploadProgress {
   error?: string
 }
 
+// Cap simultaneous uploads so a whole-folder selection (which can be hundreds of
+// images) doesn't fire every request at once and overwhelm the server.
+const UPLOAD_CONCURRENCY = 5
+
+async function runWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let index = 0
+  const runNext = async (): Promise<void> => {
+    const i = index++
+    if (i >= items.length) return
+    await worker(items[i])
+    await runNext()
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => runNext()))
+}
+
 /** Drop zone + per-file progress + "Start Review" once any image is uploaded. */
 export function UploadPage({ imageCount, onStartReview }: UploadPageProps) {
   const upload = useUpload()
@@ -21,26 +40,22 @@ export function UploadPage({ imageCount, onStartReview }: UploadPageProps) {
 
   const handleFiles = async (files: File[]) => {
     setPending(files.map((f) => ({ fileName: f.name, status: 'pending' })))
-    // Fire all uploads in parallel; record results as they resolve.
-    await Promise.all(
-      files.map((file) =>
-        upload
-          .mutateAsync(file)
-          .then(() =>
-            setPending((rows) =>
-              rows.map((r) => (r.fileName === file.name ? { ...r, status: 'done' } : r)),
-            ),
-          )
-          .catch((err: unknown) => {
-            const message = err instanceof ApiError ? err.detail : 'Upload failed'
-            setPending((rows) =>
-              rows.map((r) =>
-                r.fileName === file.name ? { ...r, status: 'failed', error: message } : r,
-              ),
-            )
-          }),
-      ),
-    )
+    // Upload with a concurrency cap; record each result as it resolves.
+    await runWithConcurrency(files, UPLOAD_CONCURRENCY, async (file) => {
+      try {
+        await upload.mutateAsync(file)
+        setPending((rows) =>
+          rows.map((r) => (r.fileName === file.name ? { ...r, status: 'done' } : r)),
+        )
+      } catch (err: unknown) {
+        const message = err instanceof ApiError ? err.detail : 'Upload failed'
+        setPending((rows) =>
+          rows.map((r) =>
+            r.fileName === file.name ? { ...r, status: 'failed', error: message } : r,
+          ),
+        )
+      }
+    })
   }
 
   const inFlight = pending.some((r) => r.status === 'pending')
