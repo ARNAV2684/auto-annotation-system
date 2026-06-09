@@ -97,34 +97,7 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
   }
 
   const inferPoints = useInferPoints(currentImageId ?? '')
-  const finishSmart = () => {
-    if (smartPoints.length === 0 || !currentImageId) return
-    inferPoints.mutate({ points: smartPoints, simplify }, { onSuccess: () => setSmartPoints([]) })
-  }
   const cancelSmart = () => setSmartPoints([])
-
-  // Enter = finish, Esc = cancel while building a Smart Select (skip in inputs).
-  useEffect(() => {
-    if (currentTool !== 'smart' || smartPoints.length === 0) return
-    const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null
-      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
-      if (e.key === 'Enter') {
-        e.preventDefault()
-        if (currentImageId) {
-          inferPoints.mutate(
-            { points: smartPoints, simplify },
-            { onSuccess: () => setSmartPoints([]) },
-          )
-        }
-      } else if (e.key === 'Escape') {
-        e.preventDefault()
-        setSmartPoints([])
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [currentTool, smartPoints, simplify, currentImageId, inferPoints])
 
   // Pre-warm SAM's image embedding whenever the user opens an image. Fires-
   // and-forgets the side effect (mutateAsync result is ignored).
@@ -218,6 +191,69 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
   const repeatPrevious = () => {
     if (currentIndex > 0) copyAnnotations.mutate(imageList[currentIndex - 1].image_id)
   }
+  // Record a creation (point/box/smart/polygon) so Ctrl+Z removes the new mask.
+  // Undo deletes the created masks (lossless); redo re-draws them from their
+  // outlines.
+  const recordCreate = (created: Annotation[]) => {
+    if (created.length === 0) return
+    const imageId = created[0].image_id
+    const ids = created.map((a) => a.annotation_id)
+    recordHistory({
+      describe: created.length === 1 ? 'Add detection' : `Add ${created.length} detections`,
+      undo: () => ids.forEach((id) => delMutate({ annotationId: id, imageId })),
+      redo: () => {
+        created.forEach((a) => {
+          const poly = a.polygon[0]
+          if (!poly) return
+          const points: [number, number][] = []
+          for (let i = 0; i + 1 < poly.length; i += 2) points.push([poly[i], poly[i + 1]])
+          createPolygonMutate(
+            { points, label: a.label },
+            {
+              onSuccess: (c) => {
+                if (a.approved !== null) {
+                  patchMutate({ annotationId: c.annotation_id, patch: { approved: a.approved } })
+                }
+              },
+            },
+          )
+        })
+      },
+    })
+  }
+
+  const finishSmart = () => {
+    if (smartPoints.length === 0 || !currentImageId) return
+    inferPoints.mutate(
+      { points: smartPoints, simplify },
+      {
+        onSuccess: (anns) => {
+          setSmartPoints([])
+          recordCreate(anns)
+        },
+      },
+    )
+  }
+
+  // Enter = finish, Esc = cancel while building a Smart Select (skip in inputs).
+  useEffect(() => {
+    if (currentTool !== 'smart' || smartPoints.length === 0) return
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        finishSmart()
+      } else if (e.key === 'Escape') {
+        e.preventDefault()
+        setSmartPoints([])
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // finishSmart closes over the latest state; re-subscribe on the inputs it uses.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTool, smartPoints, simplify, currentImageId])
 
   // Image navigator (also used by the Shift+N/P shortcuts).
   const imageList = images ?? []
@@ -497,6 +533,7 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
               smartPoints={smartPoints}
               onAddSmartPoint={(p) => setSmartPoints((prev) => [...prev, p])}
               simplify={simplify}
+              onAnnotationsCreated={recordCreate}
             />
           ) : (
             <div className="flex h-full items-center justify-center text-slate-400">
