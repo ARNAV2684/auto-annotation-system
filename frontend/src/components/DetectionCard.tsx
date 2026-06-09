@@ -1,5 +1,9 @@
+import { useState } from 'react'
 import { useDeleteAnnotation, usePatchAnnotation } from '../api/hooks'
 import type { Annotation } from '../api/types'
+import { InlineClassPopup } from './InlineClassPopup'
+
+const ADD_NEW = '__add_new__'
 
 interface DetectionCardProps {
   annotation: Annotation
@@ -12,6 +16,7 @@ interface DetectionCardProps {
 export function DetectionCard({ annotation, classes, selected, onSelect }: DetectionCardProps) {
   const patch = usePatchAnnotation()
   const del = useDeleteAnnotation()
+  const [popupOpen, setPopupOpen] = useState(false)
 
   const setApproved = (approved: boolean | null) =>
     patch.mutate({ annotationId: annotation.annotation_id, patch: { approved } })
@@ -41,6 +46,10 @@ export function DetectionCard({ annotation, classes, selected, onSelect }: Detec
           value={classes.includes(annotation.label) ? annotation.label : ''}
           onChange={(e) => {
             e.stopPropagation()
+            if (e.target.value === ADD_NEW) {
+              setPopupOpen(true)
+              return
+            }
             setLabel(e.target.value)
           }}
           onClick={(e) => e.stopPropagation()}
@@ -56,6 +65,7 @@ export function DetectionCard({ annotation, classes, selected, onSelect }: Detec
               {cls}
             </option>
           ))}
+          <option value={ADD_NEW}>+ new class…</option>
         </select>
         <span className="font-mono text-xs text-slate-500">
           {(annotation.score * 100).toFixed(0)}%
@@ -96,6 +106,11 @@ export function DetectionCard({ annotation, classes, selected, onSelect }: Detec
           />
         </div>
       </div>
+      <InlineClassPopup
+        open={popupOpen}
+        onClose={() => setPopupOpen(false)}
+        onRegistered={(name) => setLabel(name)}
+      />
     </li>
   )
 }

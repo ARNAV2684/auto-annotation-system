@@ -52,42 +52,63 @@ def build_class_index(classes: list[str]) -> dict[str, int]:
     return {name: i for i, name in enumerate(classes)}
 
 
-def resolve_export_classes(config, project_id: str | None = None) -> tuple[list[str], list[str]]:
+def normalise_label(label: str) -> str:
+    """Canonical class / label form: lowercase, trimmed, whitespace runs -> ``_``.
+
+    Used everywhere a free-text label is turned into a class name (the export
+    writers, the annotation PATCH route, and the project store) so a class that
+    is *registered* and a label that is *applied* always agree — e.g. typing
+    ``"Big House"`` yields ``"big_house"`` on both paths.
+    """
+    return "_".join(label.strip().lower().split())
+
+
+# Backwards-compatible private alias (the writers call this name).
+_normalise_label = normalise_label
+
+
+def resolve_export_classes(
+    projects: list[dict],
+    project_id: str | None = None,
+    *,
+    crowd_classes: list[str] | None = None,
+    legacy_classes: list[str] | None = None,
+) -> tuple[list[str], list[str]]:
     """Decide which class list (and crowd classes) an export should use.
 
-    This is the single policy point for "which classes does this export cover":
+    This is the single policy point for "which classes does this export cover".
+    It is a pure function over an explicit ``projects`` list (supplied by the
+    caller from the live :class:`~app.services.project_store.ProjectStore`), so
+    newly-registered classes are honoured and the logic is trivially testable.
 
     * ``project_id`` given -> that project's ``classes`` (raises :class:`KeyError`
       if no project with that id exists). Class ids are scoped to this one
       project, which is what downstream single-purpose training expects
       (e.g. a road-defects YOLO with ``0=pothole, 1=crack, ...``).
     * ``project_id`` is ``None`` -> the de-duplicated **union** of every
-      project's classes, first-seen order preserved. This keeps the legacy
-      "export everything" behaviour working so an annotation is never silently
-      dropped just because no project was named.
-    * No ``projects`` configured at all -> fall back to the flat legacy
-      ``classes`` key.
+      project's classes, first-seen order preserved, so an annotation is never
+      silently dropped just because no project was named.
+    * Empty ``projects`` -> fall back to ``legacy_classes``.
 
     Args:
-        config: A :class:`~utils.config.Config` (or anything with ``.get``).
+        projects: List of project dicts (each has ``id`` and ``classes``).
         project_id: Optional project id to scope the export to.
+        crowd_classes: Global crowd-class list (crowd is a per-label property).
+        legacy_classes: Fallback class list when ``projects`` is empty.
 
     Returns:
-        ``(classes, crowd_classes)``. ``crowd_classes`` always comes from the
-        global ``coco.crowd_classes`` key (crowd is a per-label property, not a
-        per-project one).
+        ``(classes, crowd_classes)``.
 
     Raises:
         KeyError: If ``project_id`` is given but no such project exists.
     """
-    projects = config.get("projects") or []
-    crowd_classes = list(config.get("coco.crowd_classes", []) or [])
+    crowd = list(crowd_classes or [])
 
     if project_id is not None:
         match = next((p for p in projects if p.get("id") == project_id), None)
         if match is None:
             raise KeyError(project_id)
-        return list(match.get("classes", []) or []), crowd_classes
+        return list(match.get("classes", []) or []), crowd
 
     if projects:
         # Dict preserves first-seen insertion order while de-duplicating.
@@ -95,14 +116,9 @@ def resolve_export_classes(config, project_id: str | None = None) -> tuple[list[
         for project in projects:
             for class_name in project.get("classes", []) or []:
                 seen.setdefault(class_name, None)
-        return list(seen.keys()), crowd_classes
+        return list(seen.keys()), crowd
 
-    return list(config.get("classes", []) or []), crowd_classes
-
-
-def _normalise_label(label: str) -> str:
-    """Convert a free-text label (e.g. ``"palm tree"``) to a config-style class name."""
-    return label.strip().lower().replace(" ", "_")
+    return list(legacy_classes or []), crowd
 
 
 def resolve_class_id(label: str, class_index: dict[str, int]) -> int | None:

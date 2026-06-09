@@ -98,6 +98,16 @@ export interface Project {
   default_prompts: string[]
 }
 
+export interface CreateProjectRequest {
+  label: string
+  classes?: string[]
+  default_prompts?: string[]
+}
+
+export interface AddClassRequest {
+  name: string
+}
+
 export type BulkAction = 'approve' | 'reject' | 'delete'
 
 export interface BulkAnnotationRequest {
