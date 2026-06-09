@@ -67,6 +67,14 @@ export interface PointSpec {
   label: 0 | 1
 }
 
+/** A Smart-Select object collected (but not yet committed): its click point
+ *  plus the previewed outline shown on the canvas. */
+export interface SmartObject {
+  x: number
+  y: number
+  polygon: Polygon[]
+}
+
 export interface MultiPointRequest {
   points: PointSpec[]
   multimask?: boolean
