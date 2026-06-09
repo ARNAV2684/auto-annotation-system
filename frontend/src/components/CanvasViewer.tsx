@@ -1,19 +1,24 @@
 import type Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
-import { useLayoutEffect, useRef, useState } from 'react'
-import { Image as KonvaImage, Layer, Rect, Stage } from 'react-konva'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Circle, Image as KonvaImage, Layer, Line, Rect, Stage } from 'react-konva'
 import { useAnnotations, useInferBox, useInferPoint } from '../api/hooks'
-import type { ImageRecord } from '../api/types'
+import type { ImageRecord, PointSpec, Polygon } from '../api/types'
 import { MaskOverlay } from './MaskOverlay'
 import { useImageElement } from './useImageElement'
 
-export type Tool = 'point' | 'box'
+export type Tool = 'point' | 'box' | 'smart'
 
 interface CanvasViewerProps {
   image: ImageRecord
   tool: Tool
   selectedAnnotationId: string | null
   onSelectAnnotation: (id: string | null) => void
+  /** Smart Select state (owned by ReviewPage so the side panel can share it). */
+  smartPoints?: PointSpec[]
+  onAddSmartPoint?: (point: PointSpec) => void
+  /** Polygon simplification tolerance for the Smart Select preview. */
+  simplify?: number
 }
 
 interface DragBox {
@@ -67,12 +72,24 @@ export function CanvasViewer({
   tool,
   selectedAnnotationId,
   onSelectAnnotation,
+  smartPoints = [],
+  onAddSmartPoint,
+  simplify,
 }: CanvasViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<Konva.Stage>(null)
   const [stageSize, setStageSize] = useState({ width: 800, height: 600 })
   const [view, setView] = useState<ViewTransform>({ scale: 1, panX: 0, panY: 0 })
   const [dragBox, setDragBox] = useState<DragBox | null>(null)
+  // Smart Select ghost preview polygon (geometry only; never persisted here).
+  const [previewPolygon, setPreviewPolygon] = useState<Polygon[] | null>(null)
+  const [prevSmartLen, setPrevSmartLen] = useState(0)
+  const previewAbort = useRef<AbortController | null>(null)
+  const lastPreviewAt = useRef(0)
+  // Cursor in image-pixel coords (for the crosshair guides) and the annotation
+  // currently under the cursor (for hover highlight).
+  const [cursorImg, setCursorImg] = useState<{ x: number; y: number } | null>(null)
+  const [hoveredId, setHoveredId] = useState<string | null>(null)
   const [panOrigin, setPanOrigin] = useState<{
     cursorX: number
     cursorY: number
@@ -87,6 +104,39 @@ export function CanvasViewer({
   const { data: annotations } = useAnnotations(image.image_id)
   const inferPoint = useInferPoint(image.image_id)
   const inferBox = useInferBox(image.image_id)
+
+  // Smart Select preview: a cheap, non-persisting SAM call. Stale requests are
+  // aborted so only the latest hover/point set paints the ghost mask.
+  const requestPreview = useCallback(
+    (points: PointSpec[]) => {
+      if (points.length === 0) return
+      previewAbort.current?.abort()
+      const controller = new AbortController()
+      previewAbort.current = controller
+      fetch(`/api/images/${image.image_id}/infer/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ points, simplify: simplify ?? null }),
+        signal: controller.signal,
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data) setPreviewPolygon(data.polygon as Polygon[])
+        })
+        .catch(() => {
+          /* aborted or failed — leave the previous preview in place */
+        })
+    },
+    [image.image_id, simplify],
+  )
+
+  // Once points are committed (clicked), the preview tracks them (and re-runs
+  // when Simplify changes). requestPreview clears the ghost when the list is
+  // empty; switching tools clears it via the derive-during-render block below.
+  // Hover-driven preview is handled in handleMouseMove.
+  useEffect(() => {
+    if (tool === 'smart' && smartPoints.length > 0) requestPreview(smartPoints)
+  }, [tool, smartPoints, requestPreview])
 
   // ResizeObserver: catches sidebar drags, browser zoom, and any container reflow.
   useLayoutEffect(() => {
@@ -120,10 +170,20 @@ export function CanvasViewer({
     setView(fitTransform())
     setDragBox(null)
     setPanOrigin(null)
+    setHoveredId(null)
+    setCursorImg(null)
+    setPreviewPolygon(null)
   }
   if (prevTool !== tool) {
     setPrevTool(tool)
     setDragBox(null)
+    setPreviewPolygon(null)
+  }
+  // When committed points drop to zero (after Finish/Cancel), clear the ghost
+  // once — but leave hover-driven previews (which keep smartPoints empty) alone.
+  if (prevSmartLen !== smartPoints.length) {
+    setPrevSmartLen(smartPoints.length)
+    if (smartPoints.length === 0) setPreviewPolygon(null)
   }
 
   // Cursor: pan trumps tool style.
@@ -179,8 +239,11 @@ export function CanvasViewer({
   }
 
   const handleMouseMove = (e: KonvaEventObject<MouseEvent>) => {
+    const stage = e.target.getStage()
+    const img = stage?.getRelativePointerPosition()
+    if (img) setCursorImg({ x: img.x, y: img.y })
+
     if (panOrigin) {
-      const stage = e.target.getStage()
       const screen = stage?.getPointerPosition()
       if (!screen) return
       setView({
@@ -191,11 +254,28 @@ export function CanvasViewer({
       return
     }
     if (dragBox && tool === 'box') {
-      const img = e.target.getStage()?.getRelativePointerPosition()
       if (!img) return
       setDragBox({ ...dragBox, x2: img.x, y2: img.y })
+      return
+    }
+    // Smart Select hover preview: only while no points are committed yet, so the
+    // ghost mask follows the cursor. Throttled to keep SAM calls reasonable.
+    if (tool === 'smart' && img && smartPoints.length === 0 && imageElement) {
+      const inBounds =
+        img.x >= 0 &&
+        img.y >= 0 &&
+        img.x < imageElement.naturalWidth &&
+        img.y < imageElement.naturalHeight
+      const now = performance.now()
+      if (inBounds && now - lastPreviewAt.current > 120) {
+        lastPreviewAt.current = now
+        requestPreview([{ x: img.x, y: img.y, label: 1 }])
+      }
     }
   }
+
+  // Clear the crosshair when the cursor leaves the canvas entirely.
+  const handleMouseLeave = () => setCursorImg(null)
 
   const handleMouseUp = () => {
     if (panOrigin) {
@@ -220,11 +300,9 @@ export function CanvasViewer({
   }
 
   const handleClick = (e: KonvaEventObject<MouseEvent>) => {
-    if (tool !== 'point' || !imageElement) return
+    if (!imageElement) return
     // Ignore clicks that started as pans.
     if (panOrigin !== null) return
-    // Let MaskOverlay handle its own clicks; we only fire when the background was hit.
-    if (e.target !== e.currentTarget && e.target.getClassName() !== 'Image') return
     const img = e.target.getStage()?.getRelativePointerPosition()
     if (!img) return
     if (
@@ -235,7 +313,17 @@ export function CanvasViewer({
     ) {
       return
     }
-    inferPoint.mutate({ x: img.x, y: img.y, label: 1 })
+    if (tool === 'smart') {
+      // Masks are non-interactive in Smart mode, so the click lands here:
+      // left = include point, Shift = exclude point.
+      onAddSmartPoint?.({ x: img.x, y: img.y, label: e.evt.shiftKey ? 0 : 1 })
+      return
+    }
+    if (tool === 'point') {
+      // Let MaskOverlay handle its own clicks; only fire on a background hit.
+      if (e.target !== e.currentTarget && e.target.getClassName() !== 'Image') return
+      inferPoint.mutate({ x: img.x, y: img.y, label: 1 })
+    }
   }
 
   // ─── overlay UI: zoom % + Reset + hint ─────────────────────────────────
@@ -247,6 +335,19 @@ export function CanvasViewer({
     setView({ ...view, scale: clamp(view.scale / ZOOM_FACTOR, MIN_SCALE, MAX_SCALE) })
 
   const busy = inferPoint.isPending || inferBox.isPending
+
+  // Crosshair guides follow the cursor while it is over the image and we are not
+  // mid-pan, so the user can line up a click/box precisely.
+  const imgW = imageElement?.naturalWidth ?? 0
+  const imgH = imageElement?.naturalHeight ?? 0
+  const showCrosshair =
+    !!imageElement &&
+    !!cursorImg &&
+    !panOrigin &&
+    cursorImg.x >= 0 &&
+    cursorImg.x <= imgW &&
+    cursorImg.y >= 0 &&
+    cursorImg.y <= imgH
 
   return (
     <div ref={containerRef} className={`relative h-full w-full bg-slate-100 ${cursorClass}`}>
@@ -262,6 +363,7 @@ export function CanvasViewer({
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseLeave}
         onClick={handleClick}
       >
         <Layer>
@@ -279,10 +381,40 @@ export function CanvasViewer({
             <MaskOverlay
               annotations={annotations}
               selectedId={selectedAnnotationId}
-              viewScale={view.scale}
+              hoveredId={hoveredId}
+              interactive={tool !== 'smart'}
               onSelect={onSelectAnnotation}
+              onHover={setHoveredId}
             />
           )}
+          {tool === 'smart' &&
+            previewPolygon?.map((poly, i) => (
+              <Line
+                key={`preview-${i}`}
+                points={poly}
+                closed
+                fill="rgba(14, 165, 233, 0.25)"
+                stroke="rgba(14, 165, 233, 0.95)"
+                strokeWidth={1.5}
+                dash={[5, 4]}
+                strokeScaleEnabled={false}
+                listening={false}
+              />
+            ))}
+          {tool === 'smart' &&
+            smartPoints.map((p, i) => (
+              <Circle
+                key={`pt-${i}`}
+                x={p.x}
+                y={p.y}
+                radius={4}
+                fill={p.label === 1 ? '#22c55e' : '#ef4444'}
+                stroke="#ffffff"
+                strokeWidth={1.5}
+                strokeScaleEnabled={false}
+                listening={false}
+              />
+            ))}
           {dragBox && tool === 'box' && (
             <Rect
               x={Math.min(dragBox.x1, dragBox.x2)}
@@ -295,6 +427,26 @@ export function CanvasViewer({
               dash={[6 / view.scale, 6 / view.scale]}
               listening={false}
             />
+          )}
+          {showCrosshair && cursorImg && (
+            <>
+              <Line
+                points={[cursorImg.x, 0, cursorImg.x, imgH]}
+                stroke="rgba(14, 165, 233, 0.5)"
+                strokeWidth={1}
+                dash={[4, 4]}
+                strokeScaleEnabled={false}
+                listening={false}
+              />
+              <Line
+                points={[0, cursorImg.y, imgW, cursorImg.y]}
+                stroke="rgba(14, 165, 233, 0.5)"
+                strokeWidth={1}
+                dash={[4, 4]}
+                strokeScaleEnabled={false}
+                listening={false}
+              />
+            </>
           )}
         </Layer>
       </Stage>

@@ -53,6 +53,8 @@ class ImageRow:
     file_name: str
     width: int
     height: int
+    done: bool = False  # marked "reviewed / done" by the user
+    tags: list[str] = field(default_factory=list)  # free-form image-level tags
 
 
 @dataclass
@@ -137,6 +139,27 @@ class SessionStore:
     def get_image(self, image_id: str) -> ImageRow | None:
         with self._lock:
             return next((i for i in self._data.images if i.image_id == image_id), None)
+
+    def update_image(
+        self, image_id: str, done: bool | None = None, tags: list[str] | None = None
+    ) -> ImageRow | None:
+        """Patch image-level fields (``done`` / ``tags``). Returns the row or None."""
+        with self._lock:
+            row = next((i for i in self._data.images if i.image_id == image_id), None)
+            if row is None:
+                return None
+            if done is not None:
+                row.done = done
+            if tags is not None:
+                # De-duplicate while preserving order; drop blanks.
+                seen: dict[str, None] = {}
+                for tag in tags:
+                    cleaned = tag.strip()
+                    if cleaned:
+                        seen.setdefault(cleaned, None)
+                row.tags = list(seen.keys())
+            self._persist()
+            return row
 
     def get_image_path(self, image_id: str) -> Path | None:
         """Return the on-disk path for an image, or ``None`` if missing."""

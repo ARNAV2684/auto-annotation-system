@@ -10,6 +10,10 @@ paths:
   sample_images: data/sample_images
   sample_annotations: data/sample_annotations
   output_dir: outputs
+  # Writable, app-managed copy of the project list. Seeded from the `projects`
+  # block below on first run, then mutated at runtime when the user creates a
+  # group or registers a custom class. Gitignored (lives under outputs/).
+  projects_store: outputs/projects.json
 
 # ─── SAM 2 ───
 sam:

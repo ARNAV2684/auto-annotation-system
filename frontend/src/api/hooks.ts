@@ -14,17 +14,21 @@ import {
 } from '@tanstack/react-query'
 import { deleteJson, getJson, patchJson, postFile, postJson } from './client'
 import type {
+  AddClassRequest,
   Annotation,
   AnnotationPatch,
   AutoDetectRequest,
   BoxRequest,
   BulkAnnotationRequest,
   BulkAnnotationResponse,
+  CreateProjectRequest,
   EmbedResponse,
   ExportRequest,
   ExportResponse,
   HealthResponse,
+  ImagePatch,
   ImageRecord,
+  MultiPointRequest,
   PointRequest,
   Project,
   StatsResponse,
@@ -81,6 +85,22 @@ export function useProjects(): UseQueryResult<Project[]> {
   })
 }
 
+export function useCreateProject(): UseMutationResult<Project, Error, CreateProjectRequest> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body) => postJson<Project>('/api/projects', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.projects }),
+  })
+}
+
+export function useAddClass(projectId: string): UseMutationResult<Project, Error, AddClassRequest> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body) => postJson<Project>(`/api/projects/${projectId}/classes`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.projects }),
+  })
+}
+
 // ─── writes ──────────────────────────────────────────────────────────────
 
 export function useUpload(): UseMutationResult<ImageRecord, Error, File> {
@@ -91,6 +111,14 @@ export function useUpload(): UseMutationResult<ImageRecord, Error, File> {
       qc.invalidateQueries({ queryKey: qk.images })
       qc.invalidateQueries({ queryKey: qk.stats })
     },
+  })
+}
+
+export function usePatchImage(imageId: string): UseMutationResult<ImageRecord, Error, ImagePatch> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body) => patchJson<ImageRecord>(`/api/images/${imageId}`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.images }),
   })
 }
 
@@ -106,6 +134,20 @@ export function useInferPoint(
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (body) => postJson<Annotation[]>(`/api/images/${imageId}/infer/point`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.annotationsFor(imageId) })
+      qc.invalidateQueries({ queryKey: qk.images })
+      qc.invalidateQueries({ queryKey: qk.stats })
+    },
+  })
+}
+
+export function useInferPoints(
+  imageId: string,
+): UseMutationResult<Annotation[], Error, MultiPointRequest> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body) => postJson<Annotation[]>(`/api/images/${imageId}/infer/points`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.annotationsFor(imageId) })
       qc.invalidateQueries({ queryKey: qk.images })

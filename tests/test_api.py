@@ -27,7 +27,9 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.api import routes  # noqa: E402
 from app.main import app  # noqa: E402
 from app.services.model_registry import get_model_registry  # noqa: E402
+from app.services.project_store import ProjectStore  # noqa: E402
 from app.services.session_store import SessionStore  # noqa: E402
+from core.annotation_converter import resolve_export_classes  # noqa: E402
 from utils.config import load_config  # noqa: E402
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -68,6 +70,13 @@ class StubModelRegistry:
         mask[max(0, y1):min(40, y2), max(0, x1):min(40, x2)] = True
         return (mask, 0.77)
 
+    def predict_points(
+        self, points, labels, multimask: bool = False
+    ) -> tuple[list[np.ndarray], list[float]]:
+        mask = np.zeros((40, 40), dtype=bool)
+        mask[5:25, 5:25] = True
+        return ([mask], [0.88])
+
     def auto_detect(self, image_path: Path, prompts) -> list[Any]:
         big = np.zeros((40, 40), dtype=bool)
         big[10:30, 10:30] = True
@@ -88,6 +97,8 @@ def client(tmp_path: Path) -> TestClient:
     """A TestClient with the model registry stubbed and session storage in tmp_path."""
     store = SessionStore(root=tmp_path / "sessions")
     routes._session_singleton = store  # private but used only by get_session_store
+    # Isolated project store per test, freshly seeded from config into tmp_path.
+    routes._project_store_singleton = ProjectStore(path=tmp_path / "projects.json")
     # Build the stub ONCE so cache state (current image_id) persists across requests.
     stub_registry = StubModelRegistry()
     app.dependency_overrides[get_model_registry] = lambda: stub_registry
@@ -95,6 +106,7 @@ def client(tmp_path: Path) -> TestClient:
         yield c
     app.dependency_overrides.clear()
     routes._session_singleton = None
+    routes._project_store_singleton = None
 
 
 @pytest.fixture
@@ -163,6 +175,31 @@ def test_get_image_file_returns_bytes(client: TestClient, png_bytes: bytes) -> N
     assert response.headers["content-type"].startswith("image/")
 
 
+def test_patch_image_marks_done(client: TestClient, png_bytes: bytes) -> None:
+    image_id = _upload(client, png_bytes)["image_id"]
+    assert _upload_done_state(client, image_id) is False
+    body = client.patch(f"/api/images/{image_id}", json={"done": True}).json()
+    assert body["done"] is True
+    assert _upload_done_state(client, image_id) is True
+
+
+def test_patch_image_unknown_404(client: TestClient) -> None:
+    assert client.patch("/api/images/nope", json={"done": True}).status_code == 404
+
+
+def test_patch_image_sets_tags_deduped(client: TestClient, png_bytes: bytes) -> None:
+    image_id = _upload(client, png_bytes)["image_id"]
+    body = client.patch(
+        f"/api/images/{image_id}", json={"tags": ["blurry", "blurry", " urban ", ""]}
+    ).json()
+    assert body["tags"] == ["blurry", "urban"]  # deduped, trimmed, blanks dropped
+
+
+def _upload_done_state(client: TestClient, image_id: str) -> bool:
+    record = next(r for r in client.get("/api/images").json() if r["image_id"] == image_id)
+    return record["done"]
+
+
 def test_embed_endpoint_reports_cache_state(client: TestClient, png_bytes: bytes) -> None:
     image_id = _upload(client, png_bytes)["image_id"]
     first = client.post(f"/api/images/{image_id}/embed").json()
@@ -222,6 +259,47 @@ def test_auto_detect_replaces_previous_auto_annotations(
     assert {r["annotation_id"] for r in first}.isdisjoint(
         {r["annotation_id"] for r in second}
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Smart Select (multi-point preview + commit) — PR Q
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_preview_returns_polygon_without_persisting(
+    client: TestClient, png_bytes: bytes
+) -> None:
+    image_id = _upload(client, png_bytes)["image_id"]
+    response = client.post(
+        f"/api/images/{image_id}/infer/preview",
+        json={"points": [{"x": 15, "y": 15, "label": 1}]},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["polygon"] and isinstance(body["polygon"][0], list)
+    assert 0.0 <= body["score"] <= 1.0
+    # Preview must NOT create an annotation.
+    assert client.get(f"/api/images/{image_id}/annotations").json() == []
+
+
+def test_infer_points_commits_one_annotation(client: TestClient, png_bytes: bytes) -> None:
+    image_id = _upload(client, png_bytes)["image_id"]
+    rows = client.post(
+        f"/api/images/{image_id}/infer/points",
+        json={"points": [{"x": 15, "y": 15, "label": 1}, {"x": 8, "y": 8, "label": 0}]},
+    ).json()
+    assert len(rows) == 1
+    assert rows[0]["source"] == "point"
+    assert client.get(f"/api/images/{image_id}/annotations").json()[0]["annotation_id"] == (
+        rows[0]["annotation_id"]
+    )
+
+
+def test_preview_rejects_empty_points(client: TestClient, png_bytes: bytes) -> None:
+    image_id = _upload(client, png_bytes)["image_id"]
+    response = client.post(
+        f"/api/images/{image_id}/infer/preview", json={"points": []}
+    )
+    assert response.status_code == 422
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -316,6 +394,112 @@ def test_projects_road_defects_has_culvert(client: TestClient) -> None:
     rd = next(p for p in projects if p["id"] == "road_defects")
     assert "culvert" in rd["classes"]
     assert "pothole" in rd["classes"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Project creation + class registration (PR O)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_create_project_adds_new_group(client: TestClient) -> None:
+    response = client.post(
+        "/api/projects", json={"label": "Buildings", "classes": ["house", "Shed"]}
+    )
+    assert response.status_code == 201
+    project = response.json()
+    assert project["id"] == "buildings"
+    assert project["label"] == "Buildings"
+    assert project["classes"] == ["house", "shed"]  # normalised
+    # And it shows up in the listing.
+    ids = {p["id"] for p in client.get("/api/projects").json()}
+    assert "buildings" in ids
+
+
+def test_create_project_rejects_empty_label(client: TestClient) -> None:
+    assert client.post("/api/projects", json={"label": "   "}).status_code == 422
+
+
+def test_create_project_rejects_duplicate(client: TestClient) -> None:
+    # 'Vegetation' is seeded from config.
+    assert client.post("/api/projects", json={"label": "Vegetation"}).status_code == 422
+
+
+def test_add_class_to_existing_project(client: TestClient) -> None:
+    response = client.post("/api/projects/infrastructure/classes", json={"name": "house"})
+    assert response.status_code == 200
+    assert "house" in response.json()["classes"]
+
+
+def test_add_class_normalises_name(client: TestClient) -> None:
+    project = client.post(
+        "/api/projects/infrastructure/classes", json={"name": "Water Tank"}
+    ).json()
+    assert "water_tank" in project["classes"]
+
+
+def test_add_class_is_idempotent(client: TestClient) -> None:
+    client.post("/api/projects/infrastructure/classes", json={"name": "house"})
+    project = client.post(
+        "/api/projects/infrastructure/classes", json={"name": "house"}
+    ).json()
+    assert project["classes"].count("house") == 1
+
+
+def test_add_class_unknown_project_404(client: TestClient) -> None:
+    response = client.post("/api/projects/nope/classes", json={"name": "house"})
+    assert response.status_code == 404
+
+
+def test_add_class_rejects_empty_name(client: TestClient) -> None:
+    response = client.post("/api/projects/infrastructure/classes", json={"name": "  "})
+    assert response.status_code == 422
+
+
+def test_register_class_then_export_includes_it(
+    client: TestClient, png_bytes: bytes
+) -> None:
+    # The end-to-end loop: register 'house' under infrastructure, label an
+    # annotation 'house', approve it, export the infrastructure project -> it
+    # comes through (num_dropped == 0) instead of being skipped.
+    client.post("/api/projects/infrastructure/classes", json={"name": "house"})
+    image_id = _upload(client, png_bytes)["image_id"]
+    _approved_ann_with_label(client, image_id, "house")
+    body = client.post(
+        "/api/export",
+        json={"formats": ["yolo"], "only_approved": True, "project_id": "infrastructure"},
+    ).json()
+    assert body["num_annotations_exported"] == 1
+    assert body["num_dropped"] == 0
+
+
+# resolve_export_classes is a pure function — unit-test it directly.
+
+def test_resolve_export_classes_scopes_to_project() -> None:
+    projects = [{"id": "a", "classes": ["x", "y"]}, {"id": "b", "classes": ["z"]}]
+    classes, crowd = resolve_export_classes(projects, "a")
+    assert classes == ["x", "y"] and crowd == []
+
+
+def test_resolve_export_classes_union_dedups_preserving_order() -> None:
+    projects = [{"id": "a", "classes": ["x", "y"]}, {"id": "b", "classes": ["y", "z"]}]
+    classes, _ = resolve_export_classes(projects, None)
+    assert classes == ["x", "y", "z"]
+
+
+def test_resolve_export_classes_unknown_project_raises() -> None:
+    with pytest.raises(KeyError):
+        resolve_export_classes([{"id": "a", "classes": ["x"]}], "missing")
+
+
+def test_resolve_export_classes_legacy_fallback() -> None:
+    classes, _ = resolve_export_classes([], None, legacy_classes=["l1", "l2"])
+    assert classes == ["l1", "l2"]
+
+
+def test_resolve_export_classes_passes_crowd_through() -> None:
+    _, crowd = resolve_export_classes(
+        [{"id": "a", "classes": ["x"]}], "a", crowd_classes=["c"]
+    )
+    assert crowd == ["c"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

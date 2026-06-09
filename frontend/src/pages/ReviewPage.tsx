@@ -4,15 +4,20 @@ import {
   useDeleteAnnotation,
   useEmbed,
   useImages,
+  useInferPoints,
   usePatchAnnotation,
+  usePatchImage,
 } from '../api/hooks'
-import type { Project } from '../api/types'
+import type { PointSpec, Project } from '../api/types'
 import { AutoDetectPanel } from '../components/AutoDetectPanel'
 import { CanvasViewer, type Tool } from '../components/CanvasViewer'
 import { DetectionList } from '../components/DetectionList'
 import { ImageList } from '../components/ImageList'
+import { ClassesPanel, LayersPanel, RawDataPanel, TagsPanel } from '../components/LeftPanels'
 import { ShortcutHelpOverlay } from '../components/ShortcutHelpOverlay'
+import { SmartSelectPanel } from '../components/SmartSelectPanel'
 import { ToolPalette } from '../components/ToolPalette'
+import { TopBar } from '../components/TopBar'
 import { useKeyboardShortcuts, type Shortcut } from '../components/useKeyboardShortcuts'
 
 interface ReviewPageProps {
@@ -21,6 +26,16 @@ interface ReviewPageProps {
   onBack: () => void
   onOpenExport: () => void
 }
+
+type LeftTab = 'images' | 'classes' | 'layers' | 'tags' | 'raw'
+
+const LEFT_TABS: { key: LeftTab; label: string }[] = [
+  { key: 'images', label: 'Images' },
+  { key: 'classes', label: 'Classes' },
+  { key: 'layers', label: 'Layers' },
+  { key: 'tags', label: 'Tags' },
+  { key: 'raw', label: 'Raw' },
+]
 
 /**
  * Three-column layout: left = image thumbnails, centre = canvas, right = controls
@@ -43,9 +58,15 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
   const [currentTool, setCurrentTool] = useState<Tool>('point')
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
-  // Tracks the previous image id so we can reset selection when it changes
+  const [trainOpen, setTrainOpen] = useState(false)
+  const [leftTab, setLeftTab] = useState<LeftTab>('images')
+  // Smart Select state, owned here so the canvas and the side panel share it.
+  const [smartPoints, setSmartPoints] = useState<PointSpec[]>([])
+  const [simplify, setSimplify] = useState(2)
+  // Tracks the previous image id / tool so we can reset transient state on change
   // (React 19's "derive state during render" pattern - no effect needed).
   const [prevImageId, setPrevImageId] = useState<string | null>(null)
+  const [prevTool, setPrevTool] = useState<Tool>('point')
 
   // Auto-select the first image as soon as the list arrives (also during render
   // - no effect needed; the next render will see the new currentImageId).
@@ -55,7 +76,42 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
   if (prevImageId !== currentImageId) {
     setPrevImageId(currentImageId)
     setSelectedAnnotationId(null)
+    setSmartPoints([])
   }
+  if (prevTool !== currentTool) {
+    setPrevTool(currentTool)
+    if (currentTool !== 'smart') setSmartPoints([])
+  }
+
+  const inferPoints = useInferPoints(currentImageId ?? '')
+  const finishSmart = () => {
+    if (smartPoints.length === 0 || !currentImageId) return
+    inferPoints.mutate({ points: smartPoints, simplify }, { onSuccess: () => setSmartPoints([]) })
+  }
+  const cancelSmart = () => setSmartPoints([])
+
+  // Enter = finish, Esc = cancel while building a Smart Select (skip in inputs).
+  useEffect(() => {
+    if (currentTool !== 'smart' || smartPoints.length === 0) return
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        if (currentImageId) {
+          inferPoints.mutate(
+            { points: smartPoints, simplify },
+            { onSuccess: () => setSmartPoints([]) },
+          )
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault()
+        setSmartPoints([])
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [currentTool, smartPoints, simplify, currentImageId, inferPoints])
 
   // Pre-warm SAM's image embedding whenever the user opens an image. Fires-
   // and-forgets the side effect (mutateAsync result is ignored).
@@ -70,6 +126,19 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
   const { data: annotations } = useAnnotations(currentImageId)
   const patch = usePatchAnnotation()
   const del = useDeleteAnnotation()
+  const patchImage = usePatchImage(currentImageId ?? '')
+
+  // Image navigator (also used by the Shift+N/P shortcuts).
+  const imageList = images ?? []
+  const currentIndex = imageList.findIndex((i) => i.image_id === currentImageId)
+  const goToImage = (delta: number) => {
+    if (imageList.length === 0 || currentIndex < 0) return
+    const next = (currentIndex + delta + imageList.length) % imageList.length
+    setCurrentImageId(imageList[next].image_id)
+  }
+  const toggleDone = () => {
+    if (currentImage) patchImage.mutate({ done: !currentImage.done })
+  }
 
   const shortcuts = useMemo<Shortcut[]>(() => {
     const items = images ?? []
@@ -163,6 +232,12 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
         handler: () => stepImage(-1),
       },
       {
+        combo: 'Shift+S',
+        label: 'Smart Select tool',
+        group: 'Tools',
+        handler: () => setCurrentTool('smart'),
+      },
+      {
         combo: 'Shift+T',
         label: 'Point (target) tool',
         group: 'Tools',
@@ -191,35 +266,85 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
     // grid with sensible minimums: at narrow widths the page gets a horizontal
     // scrollbar instead of crushing the canvas column.
     <div className="grid h-full min-h-0 min-w-[900px] grid-cols-[240px_minmax(420px,1fr)_320px] overflow-auto">
-      {/* Left: image list */}
+      {/* Left: view-switcher (images / classes / layers / tags / raw) */}
       <aside className="flex min-h-0 min-w-0 flex-col border-r border-slate-200 bg-white">
-        <div className="flex flex-shrink-0 items-center justify-between border-b border-slate-200 px-3 py-2">
-          <span className="text-sm font-semibold text-slate-700">Images</span>
-          <button
-            type="button"
-            onClick={onBack}
-            className="text-xs text-slate-500 hover:text-slate-800"
-          >
-            ← upload
-          </button>
+        <div className="flex-shrink-0 border-b border-slate-200">
+          <div className="flex items-center justify-between px-3 pt-1.5">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Panel
+            </span>
+            <button
+              type="button"
+              onClick={onBack}
+              className="text-xs text-slate-500 hover:text-slate-800"
+            >
+              ← upload
+            </button>
+          </div>
+          <div className="flex gap-0.5 px-1 pb-1">
+            {LEFT_TABS.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setLeftTab(t.key)}
+                className={`flex-1 rounded px-1 py-0.5 text-xs transition ${
+                  leftTab === t.key
+                    ? 'bg-slate-800 text-white'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="min-h-0 flex-1 overflow-auto">
-          <ImageList selectedId={currentImageId} onSelect={setCurrentImageId} />
+          {leftTab === 'images' && (
+            <ImageList selectedId={currentImageId} onSelect={setCurrentImageId} />
+          )}
+          {leftTab === 'classes' && (
+            <ClassesPanel annotations={annotations ?? []} projectClasses={classes} />
+          )}
+          {leftTab === 'layers' && (
+            <LayersPanel
+              annotations={annotations ?? []}
+              selectedId={selectedAnnotationId}
+              onSelect={setSelectedAnnotationId}
+            />
+          )}
+          {leftTab === 'tags' &&
+            (currentImage ? (
+              <TagsPanel
+                tags={currentImage.tags}
+                onChange={(tags) => patchImage.mutate({ tags })}
+              />
+            ) : (
+              <p className="p-3 text-sm text-slate-500">Select an image first.</p>
+            ))}
+          {leftTab === 'raw' && <RawDataPanel annotations={annotations ?? []} />}
         </div>
       </aside>
 
       {/* Centre: canvas + tool palette */}
       <section className="relative flex min-h-0 min-w-0 flex-col bg-slate-100">
-        <div className="flex flex-shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-2">
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-700">
-            {currentImage ? currentImage.file_name : 'No image selected'}
-          </span>
+        <div className="flex flex-shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-4 py-2">
+          <TopBar
+            projectLabel={project?.label ?? null}
+            fileName={currentImage?.file_name ?? null}
+            index={currentIndex}
+            total={imageList.length}
+            done={currentImage?.done ?? false}
+            onPrev={() => goToImage(-1)}
+            onNext={() => goToImage(1)}
+            onToggleDone={toggleDone}
+            onTrain={() => setTrainOpen(true)}
+          />
           <ToolPalette current={currentTool} onChange={setCurrentTool} />
           <button
             type="button"
             onClick={() => setHelpOpen(true)}
             title="Shortcuts (Shift+?)"
-            className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
+            className="flex-shrink-0 rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
           >
             ?
           </button>
@@ -231,6 +356,9 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
               tool={currentTool}
               selectedAnnotationId={selectedAnnotationId}
               onSelectAnnotation={setSelectedAnnotationId}
+              smartPoints={smartPoints}
+              onAddSmartPoint={(p) => setSmartPoints((prev) => [...prev, p])}
+              simplify={simplify}
             />
           ) : (
             <div className="flex h-full items-center justify-center text-slate-400">
@@ -242,6 +370,18 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
 
       {/* Right: detect + detections + export */}
       <aside className="flex min-h-0 min-w-0 flex-col gap-4 border-l border-slate-200 bg-slate-50 p-4">
+        {currentImage && currentTool === 'smart' && (
+          <div className="flex-shrink-0">
+            <SmartSelectPanel
+              pointCount={smartPoints.length}
+              simplify={simplify}
+              onSimplifyChange={setSimplify}
+              onFinish={finishSmart}
+              onCancel={cancelSmart}
+              busy={inferPoints.isPending}
+            />
+          </div>
+        )}
         {currentImage && (
           <div className="flex-shrink-0">
             <AutoDetectPanel imageId={currentImage.image_id} project={project} />
@@ -271,6 +411,33 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
         shortcuts={shortcuts}
         onClose={() => setHelpOpen(false)}
       />
+
+      {trainOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+          onClick={() => setTrainOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-[26rem] rounded-lg bg-white p-6 shadow-xl"
+          >
+            <h2 className="text-lg font-semibold text-slate-900">Train a model</h2>
+            <p className="mt-2 text-sm text-slate-600">
+              Custom model training runs on your approved annotations and lands in the next sprint.
+              For now, keep labeling and approving — those become the training set.
+            </p>
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setTrainOpen(false)}
+                className="rounded bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
+              >
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
