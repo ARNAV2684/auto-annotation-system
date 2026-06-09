@@ -178,6 +178,15 @@ class ExportRequest(BaseModel):
         default=True,
         description="If True (default), export only annotations with approved=True.",
     )
+    project_id: str | None = Field(
+        default=None,
+        description=(
+            "If set, scope the export to this project's class list; annotations "
+            "whose label is outside it are skipped and reported in the response. "
+            "If omitted, the union of every project's classes is used so nothing "
+            "is silently dropped."
+        ),
+    )
 
 
 class ExportResponse(BaseModel):
@@ -187,6 +196,14 @@ class ExportResponse(BaseModel):
     num_images: int
     num_annotations_exported: int
     download_url: str
+    num_dropped: int = Field(
+        default=0,
+        description="Annotations skipped because their label is not in the export class list.",
+    )
+    dropped_labels: list[str] = Field(
+        default_factory=list,
+        description="Sorted unique labels that were skipped (for a UI warning).",
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
