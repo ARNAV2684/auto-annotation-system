@@ -115,6 +115,17 @@ export function useUpload(): UseMutationResult<ImageRecord, Error, File> {
   })
 }
 
+export function useUploadZip(): UseMutationResult<ImageRecord[], Error, File> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (file: File) => postFile<ImageRecord[]>('/api/upload-zip', file),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.images })
+      qc.invalidateQueries({ queryKey: qk.stats })
+    },
+  })
+}
+
 export function usePatchImage(imageId: string): UseMutationResult<ImageRecord, Error, ImagePatch> {
   const qc = useQueryClient()
   return useMutation({

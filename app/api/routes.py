@@ -11,7 +11,9 @@ later (e.g. for a CLI or gRPC frontend).
 
 from __future__ import annotations
 
+import io
 import logging
+import zipfile
 from pathlib import Path
 from typing import Annotated
 
@@ -44,7 +46,12 @@ from app.api.schemas import (
 )
 from app.services.model_registry import ModelRegistry, get_model_registry
 from app.services.project_store import ProjectStore
-from app.services.session_store import AnnotationRow, ImageRow, SessionStore
+from app.services.session_store import (
+    SUPPORTED_IMAGE_EXTS,
+    AnnotationRow,
+    ImageRow,
+    SessionStore,
+)
 from core.annotation_converter import (
     ExportImage,
     build_class_index,
@@ -225,6 +232,48 @@ async def upload_image(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _image_record(row, num_detections=0, num_approved=0)
+
+
+@router.post(
+    "/upload-zip",
+    response_model=list[ImageRecord],
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_zip(
+    store: StoreDep,
+    file: Annotated[UploadFile, File(description="A .zip archive of drone images")],
+) -> list[ImageRecord]:
+    """Unpack a zip of images server-side and save each supported image.
+
+    This is the reliable way to add a whole folder: zip it, upload once, and we
+    extract here — no browser folder-picker quirks. Directories, hidden files,
+    macOS resource forks, and non-image entries are skipped.
+    """
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Expected a .zip file.")
+    data = await file.read()
+    records: list[ImageRecord] = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            for name in archive.namelist():
+                if name.endswith("/") or name.startswith("__MACOSX"):
+                    continue
+                base = Path(name).name
+                if not base or base.startswith("."):
+                    continue
+                if Path(base).suffix.lower() not in SUPPORTED_IMAGE_EXTS:
+                    continue
+                try:
+                    img_bytes = archive.read(name)
+                    row = store.save_image(io.BytesIO(img_bytes), base)
+                    records.append(_image_record(row, num_detections=0, num_approved=0))
+                except (ValueError, OSError):
+                    continue  # skip a single bad entry, keep going
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=400, detail="Invalid or corrupt zip file.") from exc
+    if not records:
+        raise HTTPException(status_code=422, detail="No supported images found in the zip.")
+    return records
 
 
 @router.get("/images", response_model=list[ImageRecord])

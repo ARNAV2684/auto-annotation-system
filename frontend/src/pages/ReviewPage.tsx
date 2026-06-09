@@ -6,11 +6,11 @@ import {
   useDeleteAnnotation,
   useEmbed,
   useImages,
-  useInferPoints,
+  useInferPoint,
   usePatchAnnotation,
   usePatchImage,
 } from '../api/hooks'
-import type { Annotation, PointSpec, Project } from '../api/types'
+import type { Annotation, Project, SmartObject } from '../api/types'
 import { AutoDetectPanel } from '../components/AutoDetectPanel'
 import { CanvasViewer, type Tool } from '../components/CanvasViewer'
 import { DetectionList } from '../components/DetectionList'
@@ -73,9 +73,8 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
   const [helpOpen, setHelpOpen] = useState(false)
   const [trainOpen, setTrainOpen] = useState(false)
   const [leftTab, setLeftTab] = useState<LeftTab>('images')
-  // Smart Select state, owned here so the canvas and the side panel share it.
-  const [smartPoints, setSmartPoints] = useState<PointSpec[]>([])
-  const [simplify, setSimplify] = useState(2)
+  // Smart Select collected objects, owned here so the canvas + panel share them.
+  const [smartObjects, setSmartObjects] = useState<SmartObject[]>([])
   // Tracks the previous image id / tool so we can reset transient state on change
   // (React 19's "derive state during render" pattern - no effect needed).
   const [prevImageId, setPrevImageId] = useState<string | null>(null)
@@ -89,42 +88,15 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
   if (prevImageId !== currentImageId) {
     setPrevImageId(currentImageId)
     setSelectedAnnotationId(null)
-    setSmartPoints([])
+    setSmartObjects([])
   }
   if (prevTool !== currentTool) {
     setPrevTool(currentTool)
-    if (currentTool !== 'smart') setSmartPoints([])
+    if (currentTool !== 'smart') setSmartObjects([])
   }
 
-  const inferPoints = useInferPoints(currentImageId ?? '')
-  const finishSmart = () => {
-    if (smartPoints.length === 0 || !currentImageId) return
-    inferPoints.mutate({ points: smartPoints, simplify }, { onSuccess: () => setSmartPoints([]) })
-  }
-  const cancelSmart = () => setSmartPoints([])
-
-  // Enter = finish, Esc = cancel while building a Smart Select (skip in inputs).
-  useEffect(() => {
-    if (currentTool !== 'smart' || smartPoints.length === 0) return
-    const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null
-      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
-      if (e.key === 'Enter') {
-        e.preventDefault()
-        if (currentImageId) {
-          inferPoints.mutate(
-            { points: smartPoints, simplify },
-            { onSuccess: () => setSmartPoints([]) },
-          )
-        }
-      } else if (e.key === 'Escape') {
-        e.preventDefault()
-        setSmartPoints([])
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [currentTool, smartPoints, simplify, currentImageId, inferPoints])
+  const inferPoint = useInferPoint(currentImageId ?? '')
+  const cancelSmart = () => setSmartObjects([])
 
   // Pre-warm SAM's image embedding whenever the user opens an image. Fires-
   // and-forgets the side effect (mutateAsync result is ignored).
@@ -218,6 +190,73 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
   const repeatPrevious = () => {
     if (currentIndex > 0) copyAnnotations.mutate(imageList[currentIndex - 1].image_id)
   }
+  // Record a creation (point/box/smart/polygon) so Ctrl+Z removes the new mask.
+  // Undo deletes the created masks (lossless); redo re-draws them from their
+  // outlines.
+  const recordCreate = (created: Annotation[]) => {
+    if (created.length === 0) return
+    const imageId = created[0].image_id
+    const ids = created.map((a) => a.annotation_id)
+    recordHistory({
+      describe: created.length === 1 ? 'Add detection' : `Add ${created.length} detections`,
+      undo: () => ids.forEach((id) => delMutate({ annotationId: id, imageId })),
+      redo: () => {
+        created.forEach((a) => {
+          const poly = a.polygon[0]
+          if (!poly) return
+          const points: [number, number][] = []
+          for (let i = 0; i + 1 < poly.length; i += 2) points.push([poly[i], poly[i + 1]])
+          createPolygonMutate(
+            { points, label: a.label },
+            {
+              onSuccess: (c) => {
+                if (a.approved !== null) {
+                  patchMutate({ annotationId: c.annotation_id, patch: { approved: a.approved } })
+                }
+              },
+            },
+          )
+        })
+      },
+    })
+  }
+
+  // Commit every collected object as its own annotation (one SAM point each),
+  // then record them as a single undo step and clear the collection.
+  const finishSmart = async () => {
+    if (smartObjects.length === 0 || !currentImageId) return
+    const created: Annotation[] = []
+    for (const obj of smartObjects) {
+      try {
+        const anns = await inferPoint.mutateAsync({ x: obj.x, y: obj.y, label: 1 })
+        created.push(...anns)
+      } catch {
+        /* skip a failed object, keep going */
+      }
+    }
+    setSmartObjects([])
+    if (created.length) recordCreate(created)
+  }
+
+  // Enter = finish, Esc = cancel while collecting objects (skip in inputs).
+  useEffect(() => {
+    if (currentTool !== 'smart' || smartObjects.length === 0) return
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        finishSmart()
+      } else if (e.key === 'Escape') {
+        e.preventDefault()
+        setSmartObjects([])
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // finishSmart closes over the latest state; re-subscribe on the inputs it uses.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTool, smartObjects, currentImageId])
 
   // Image navigator (also used by the Shift+N/P shortcuts).
   const imageList = images ?? []
@@ -494,9 +533,9 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
               tool={currentTool}
               selectedAnnotationId={selectedAnnotationId}
               onSelectAnnotation={setSelectedAnnotationId}
-              smartPoints={smartPoints}
-              onAddSmartPoint={(p) => setSmartPoints((prev) => [...prev, p])}
-              simplify={simplify}
+              smartObjects={smartObjects}
+              onAddSmartObject={(obj) => setSmartObjects((prev) => [...prev, obj])}
+              onAnnotationsCreated={recordCreate}
             />
           ) : (
             <div className="flex h-full items-center justify-center text-slate-400">
@@ -511,12 +550,10 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
         {currentImage && currentTool === 'smart' && (
           <div className="flex-shrink-0">
             <SmartSelectPanel
-              pointCount={smartPoints.length}
-              simplify={simplify}
-              onSimplifyChange={setSimplify}
+              objectCount={smartObjects.length}
               onFinish={finishSmart}
               onCancel={cancelSmart}
-              busy={inferPoints.isPending}
+              busy={inferPoint.isPending}
             />
           </div>
         )}
