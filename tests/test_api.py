@@ -28,6 +28,7 @@ from app.api import routes  # noqa: E402
 from app.main import app  # noqa: E402
 from app.services.model_registry import get_model_registry  # noqa: E402
 from app.services.session_store import SessionStore  # noqa: E402
+from utils.config import load_config  # noqa: E402
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stub ModelRegistry — returns small deterministic masks; no GPU, no torch.
@@ -466,3 +467,114 @@ def test_export_writes_and_serves_zip(client: TestClient, png_bytes: bytes) -> N
     assert download.status_code == 200
     assert download.headers["content-type"] == "application/zip"
     assert len(download.content) > 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Per-project export (PR N)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _approved_ann_with_label(client: TestClient, image_id: str, label: str) -> str:
+    """Create one point annotation on an image, label + approve it, return its id."""
+    ann = client.post(
+        f"/api/images/{image_id}/infer/point", json={"x": 15, "y": 15}
+    ).json()[0]
+    client.patch(
+        f"/api/annotations/{ann['annotation_id']}",
+        json={"approved": True, "label": label},
+    )
+    return ann["annotation_id"]
+
+
+def test_export_with_project_id_only_includes_matching_classes(
+    client: TestClient, png_bytes: bytes
+) -> None:
+    image_id = _upload(client, png_bytes)["image_id"]
+    _approved_ann_with_label(client, image_id, "tree")
+    _approved_ann_with_label(client, image_id, "pothole")
+    body = client.post(
+        "/api/export",
+        json={"formats": ["yolo"], "only_approved": True, "project_id": "vegetation"},
+    ).json()
+    # Only the 'tree' annotation belongs to the vegetation project.
+    assert body["num_annotations_exported"] == 1
+    assert body["num_dropped"] == 1
+    assert body["dropped_labels"] == ["pothole"]
+
+
+def test_export_drops_labels_outside_project_and_reports_them(
+    client: TestClient, png_bytes: bytes
+) -> None:
+    image_id = _upload(client, png_bytes)["image_id"]
+    _approved_ann_with_label(client, image_id, "pothole")
+    _approved_ann_with_label(client, image_id, "culvert")
+    body = client.post(
+        "/api/export",
+        json={"formats": ["yolo"], "only_approved": True, "project_id": "vegetation"},
+    ).json()
+    assert body["num_annotations_exported"] == 0
+    assert body["num_dropped"] == 2
+    assert body["dropped_labels"] == ["culvert", "pothole"]  # sorted, unique
+
+
+def test_export_without_project_id_uses_union_of_all_projects(
+    client: TestClient, png_bytes: bytes
+) -> None:
+    image_id = _upload(client, png_bytes)["image_id"]
+    _approved_ann_with_label(client, image_id, "tree")  # vegetation
+    _approved_ann_with_label(client, image_id, "pothole")  # road_defects
+    body = client.post(
+        "/api/export", json={"formats": ["yolo"], "only_approved": True}
+    ).json()
+    # No project named -> union of every project's classes -> nothing dropped.
+    assert body["num_annotations_exported"] == 2
+    assert body["num_dropped"] == 0
+    assert body["dropped_labels"] == []
+
+
+def test_export_includes_potholes_when_project_id_is_road_defects(
+    client: TestClient, png_bytes: bytes
+) -> None:
+    # Regression test for the reported bug: road-defect labels exported blank.
+    image_id = _upload(client, png_bytes)["image_id"]
+    _approved_ann_with_label(client, image_id, "pothole")
+    response = client.post(
+        "/api/export",
+        json={"formats": ["all"], "only_approved": True, "project_id": "road_defects"},
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["num_annotations_exported"] == 1
+    assert body["num_dropped"] == 0
+    download = client.get(body["download_url"])
+    assert download.status_code == 200 and len(download.content) > 0
+
+
+def test_export_rejects_unknown_project_id(client: TestClient, png_bytes: bytes) -> None:
+    image_id = _upload(client, png_bytes)["image_id"]
+    _approved_ann_with_label(client, image_id, "pothole")
+    response = client.post(
+        "/api/export",
+        json={"formats": ["yolo"], "only_approved": True, "project_id": "does_not_exist"},
+    )
+    assert response.status_code == 422
+
+
+def test_export_class_ids_match_project_class_order(
+    client: TestClient, png_bytes: bytes
+) -> None:
+    # road_defects.classes = [pothole, crack, culvert, ...] -> culvert is id 2.
+    image_id = _upload(client, png_bytes)["image_id"]
+    _approved_ann_with_label(client, image_id, "culvert")
+    body = client.post(
+        "/api/export",
+        json={"formats": ["yolo"], "only_approved": True, "project_id": "road_defects"},
+    ).json()
+    yolo_txt = (
+        load_config().path("paths.output_dir")
+        / "exports"
+        / body["run_id"]
+        / "yolo"
+        / "drone.txt"
+    )
+    first_line = yolo_txt.read_text(encoding="utf-8").strip().splitlines()[0]
+    assert first_line.split()[0] == "2"

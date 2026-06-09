@@ -38,7 +38,13 @@ from app.api.schemas import (
 )
 from app.services.model_registry import ModelRegistry, get_model_registry
 from app.services.session_store import AnnotationRow, ImageRow, SessionStore
-from core.annotation_converter import ExportImage, build_writers
+from core.annotation_converter import (
+    ExportImage,
+    build_class_index,
+    build_writers,
+    resolve_class_id,
+    resolve_export_classes,
+)
 from core.mask_processor import mask_to_bbox, mask_to_polygon
 from core.types import Detection
 from utils.config import load_config
@@ -381,11 +387,27 @@ def export(body: ExportRequest, store: StoreDep) -> ExportResponse:
     if not formats:
         raise HTTPException(status_code=422, detail="At least one format must be requested.")
 
+    # Decide which class list this export covers (one project, or the union of
+    # all projects when none is named). This is the fix for "blank exports":
+    # previously every label was matched against the legacy 3-class list, so any
+    # road-defect / infrastructure label silently resolved to nothing.
+    try:
+        classes, crowd_classes = resolve_export_classes(cfg, body.project_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"Unknown project_id: {body.project_id}"
+        ) from exc
+    class_index = build_class_index(classes)
+
     run_dir = make_run_dir(cfg.path("paths.output_dir") / "exports")
-    writers = build_writers(run_dir, formats=formats, config=cfg)
+    writers = build_writers(
+        run_dir, formats=formats, config=cfg, classes=classes, crowd_classes=crowd_classes
+    )
 
     export_images: list[ExportImage] = []
     exported_detections: list[Detection] = []
+    num_dropped = 0
+    dropped_labels: set[str] = set()
     for image in store.list_images():
         rows = [
             r for r in store.list_annotations(image_id=image.image_id)
@@ -398,6 +420,12 @@ def export(body: ExportRequest, store: StoreDep) -> ExportResponse:
             mask = store.load_mask(row.annotation_id)
             if mask is None:
                 # Polygon-only fallback (shouldn't normally happen).
+                continue
+            # Skip-and-report any label outside the chosen class list, so the
+            # writers only ever see resolvable labels and the UI can warn the user.
+            if resolve_class_id(row.label, class_index) is None:
+                num_dropped += 1
+                dropped_labels.add(row.label)
                 continue
             detections.append(
                 Detection(
@@ -423,13 +451,13 @@ def export(body: ExportRequest, store: StoreDep) -> ExportResponse:
 
     write_stats(run_dir / "stats.json", export_images, exported_detections)
 
-    # Validate every file we wrote.
+    # Validate every file we wrote — class ids must fall within the chosen list.
     if "yolo" in formats:
         for txt in (run_dir / "yolo").glob("*.txt"):
             if txt.name == "classes.txt":
                 continue
             validate_yolo_file(
-                txt, num_classes=len(cfg.get("classes", [])),
+                txt, num_classes=len(classes),
                 mode=cfg.get("yolo.mode", "segmentation"),
             )
     if "coco" in formats and (run_dir / "coco" / "annotations.json").exists():
@@ -445,6 +473,8 @@ def export(body: ExportRequest, store: StoreDep) -> ExportResponse:
         num_images=len(export_images),
         num_annotations_exported=len(exported_detections),
         download_url=f"/api/exports/{run_dir.name}.zip",
+        num_dropped=num_dropped,
+        dropped_labels=sorted(dropped_labels),
     )
 
 
