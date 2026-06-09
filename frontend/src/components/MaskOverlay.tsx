@@ -1,61 +1,99 @@
 import { Line } from 'react-konva'
 import type { Annotation } from '../api/types'
+import { colorForLabel, rgba, type RGB } from '../utils/classColors'
 
 interface MaskOverlayProps {
   annotations: Annotation[]
   selectedId: string | null
-  /** Current Stage scale - used to keep stroke widths constant in screen pixels. */
-  viewScale: number
+  hoveredId: string | null
   onSelect: (annotationId: string) => void
+  onHover: (annotationId: string | null) => void
 }
 
-// Colour code:
-//   yellow = pending review
-//   green  = approved
-//   red    = rejected
-function fillFor(approved: Annotation['approved'], highlighted: boolean): string {
-  const alpha = highlighted ? 0.55 : 0.35
-  if (approved === true) return `rgba(16, 185, 129, ${alpha})` // emerald
-  if (approved === false) return `rgba(239, 68, 68, ${alpha})` // red
-  return `rgba(250, 204, 21, ${alpha})` // amber / pending
-}
-
-function strokeFor(approved: Annotation['approved'], highlighted: boolean): string {
-  const alpha = highlighted ? 1 : 0.85
-  if (approved === true) return `rgba(5, 150, 105, ${alpha})`
-  if (approved === false) return `rgba(220, 38, 38, ${alpha})`
-  return `rgba(202, 138, 4, ${alpha})`
+interface MaskStyle {
+  fill: string
+  stroke: string
+  strokeWidth: number
+  dash: number[] | undefined
 }
 
 /**
- * Renders one Konva ``Line`` per polygon in raw image-pixel coords. The Stage
- * carries the view scale, so we only divide stroke widths by ``viewScale`` to
- * keep them constant in screen pixels regardless of zoom.
+ * Compute a mask's style under "colour by class" (Option A):
+ *   - **hue** comes from the class label, so every class is visually distinct;
+ *   - **review state** rides on a separate channel so it never fights the hue:
+ *       approved  = solid, more opaque
+ *       pending   = solid, normal opacity
+ *       rejected  = faded + dashed outline
+ *   - hover brightens; selection thickens the outline.
+ *
+ * Stroke widths are screen pixels (``strokeScaleEnabled={false}``), so they stay
+ * crisp at any zoom without dividing by the view scale.
  */
-export function MaskOverlay({ annotations, selectedId, viewScale, onSelect }: MaskOverlayProps) {
-  const baseStroke = 1.5 / viewScale
-  const highlightStroke = 3 / viewScale
+function maskStyle(
+  approved: Annotation['approved'],
+  base: RGB,
+  selected: boolean,
+  hovered: boolean,
+): MaskStyle {
+  let fillAlpha: number
+  let strokeAlpha: number
+  let dash: number[] | undefined
+  if (approved === true) {
+    fillAlpha = 0.42
+    strokeAlpha = 1
+    dash = undefined
+  } else if (approved === false) {
+    fillAlpha = 0.1
+    strokeAlpha = 0.55
+    dash = [6, 4] // dashed reads as "rejected"
+  } else {
+    fillAlpha = 0.3
+    strokeAlpha = 0.9
+    dash = undefined
+  }
+  if (hovered) fillAlpha = Math.min(fillAlpha + 0.15, 0.6)
+  if (hovered || selected) strokeAlpha = 1
+  const strokeWidth = selected ? 3.5 : hovered ? 2.5 : 1.5
+  return { fill: rgba(base, fillAlpha), stroke: rgba(base, strokeAlpha), strokeWidth, dash }
+}
+
+/**
+ * Renders one Konva ``Line`` per polygon in raw image-pixel coords, coloured by
+ * class with review state on opacity/dashing. Reports hover so the canvas can
+ * highlight the object under the cursor.
+ */
+export function MaskOverlay({
+  annotations,
+  selectedId,
+  hoveredId,
+  onSelect,
+  onHover,
+}: MaskOverlayProps) {
   return (
     <>
-      {annotations.map((ann) =>
-        ann.polygon.map((polygon, polyIdx) => {
-          const highlighted = ann.annotation_id === selectedId
-          return (
-            <Line
-              key={`${ann.annotation_id}-${polyIdx}`}
-              points={polygon}
-              closed
-              fill={fillFor(ann.approved, highlighted)}
-              stroke={strokeFor(ann.approved, highlighted)}
-              strokeWidth={highlighted ? highlightStroke : baseStroke}
-              strokeScaleEnabled={false}
-              onClick={() => onSelect(ann.annotation_id)}
-              onTap={() => onSelect(ann.annotation_id)}
-              listening
-            />
-          )
-        }),
-      )}
+      {annotations.map((ann) => {
+        const base = colorForLabel(ann.label)
+        const selected = ann.annotation_id === selectedId
+        const hovered = ann.annotation_id === hoveredId
+        const style = maskStyle(ann.approved, base, selected, hovered)
+        return ann.polygon.map((polygon, polyIdx) => (
+          <Line
+            key={`${ann.annotation_id}-${polyIdx}`}
+            points={polygon}
+            closed
+            fill={style.fill}
+            stroke={style.stroke}
+            strokeWidth={style.strokeWidth}
+            dash={style.dash}
+            strokeScaleEnabled={false}
+            onClick={() => onSelect(ann.annotation_id)}
+            onTap={() => onSelect(ann.annotation_id)}
+            onMouseEnter={() => onHover(ann.annotation_id)}
+            onMouseLeave={() => onHover(null)}
+            listening
+          />
+        ))
+      })}
     </>
   )
 }
