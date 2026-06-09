@@ -27,6 +27,12 @@ export function ToolPalette({ current, onChange }: ToolPaletteProps) {
         active={current === 'box'}
         onClick={() => onChange('box')}
       />
+      <ToolButton
+        label="Polygon"
+        hint="click vertices, Enter or double-click to finish"
+        active={current === 'polygon'}
+        onClick={() => onChange('polygon')}
+      />
     </div>
   )
 }

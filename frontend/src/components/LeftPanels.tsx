@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { Annotation } from '../api/types'
 import { colorForLabel, rgbHex } from '../utils/classColors'
+import type { HistoryAction } from './useHistory'
 
 function ColorDot({ label, muted }: { label: string; muted?: boolean }) {
   return (
@@ -165,5 +166,58 @@ export function RawDataPanel({ annotations }: { annotations: Annotation[] }) {
     <pre className="overflow-auto p-3 font-mono text-xs leading-relaxed text-slate-700">
       {JSON.stringify(annotations, null, 2)}
     </pre>
+  )
+}
+
+/** Attributes tab: read-only metadata of the selected annotation. */
+export function AttributesPanel({ annotation }: { annotation: Annotation | null }) {
+  if (!annotation) {
+    return <p className="p-3 text-sm text-slate-500">Select an annotation to see its attributes.</p>
+  }
+  const review =
+    annotation.approved === true
+      ? 'approved'
+      : annotation.approved === false
+        ? 'rejected'
+        : 'pending'
+  const rows: [string, string][] = [
+    ['id', annotation.annotation_id],
+    ['source', annotation.source],
+    ['label', annotation.label],
+    ['score', `${(annotation.score * 100).toFixed(0)}%`],
+    ['review', review],
+    ['box', annotation.box.map((v) => Math.round(v)).join(', ')],
+    ['polygons', String(annotation.polygon.length)],
+  ]
+  return (
+    <dl className="p-3 text-sm">
+      {rows.map(([key, value]) => (
+        <div key={key} className="flex justify-between gap-2 border-b border-slate-100 py-1">
+          <dt className="flex-shrink-0 text-slate-500">{key}</dt>
+          <dd className="min-w-0 truncate text-right font-mono text-xs text-slate-700">{value}</dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
+/** History tab: the undo/redo action log. Struck-through items are redoable. */
+export function HistoryPanel({ past, future }: { past: HistoryAction[]; future: HistoryAction[] }) {
+  if (past.length === 0 && future.length === 0) {
+    return <p className="p-3 text-sm text-slate-500">No actions yet.</p>
+  }
+  return (
+    <ul className="p-2 text-sm">
+      {past.map((a, i) => (
+        <li key={`p-${i}`} className="px-2 py-1 text-slate-700">
+          • {a.describe}
+        </li>
+      ))}
+      {future.map((a, i) => (
+        <li key={`f-${i}`} className="px-2 py-1 text-slate-400 line-through">
+          {a.describe}
+        </li>
+      ))}
+    </ul>
   )
 }

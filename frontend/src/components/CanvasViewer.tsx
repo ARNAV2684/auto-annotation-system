@@ -2,12 +2,12 @@ import type Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Circle, Image as KonvaImage, Layer, Line, Rect, Stage } from 'react-konva'
-import { useAnnotations, useInferBox, useInferPoint } from '../api/hooks'
+import { useAnnotations, useCreatePolygon, useInferBox, useInferPoint } from '../api/hooks'
 import type { ImageRecord, PointSpec, Polygon } from '../api/types'
 import { MaskOverlay } from './MaskOverlay'
 import { useImageElement } from './useImageElement'
 
-export type Tool = 'point' | 'box' | 'smart'
+export type Tool = 'point' | 'box' | 'smart' | 'polygon'
 
 interface CanvasViewerProps {
   image: ImageRecord
@@ -86,6 +86,8 @@ export function CanvasViewer({
   const [prevSmartLen, setPrevSmartLen] = useState(0)
   const previewAbort = useRef<AbortController | null>(null)
   const lastPreviewAt = useRef(0)
+  // Manual Polygon tool: vertices accumulated for the current draw.
+  const [polygonPoints, setPolygonPoints] = useState<{ x: number; y: number }[]>([])
   // Cursor in image-pixel coords (for the crosshair guides) and the annotation
   // currently under the cursor (for hover highlight).
   const [cursorImg, setCursorImg] = useState<{ x: number; y: number } | null>(null)
@@ -104,6 +106,7 @@ export function CanvasViewer({
   const { data: annotations } = useAnnotations(image.image_id)
   const inferPoint = useInferPoint(image.image_id)
   const inferBox = useInferBox(image.image_id)
+  const createPolygon = useCreatePolygon(image.image_id)
 
   // Smart Select preview: a cheap, non-persisting SAM call. Stale requests are
   // aborted so only the latest hover/point set paints the ghost mask.
@@ -137,6 +140,28 @@ export function CanvasViewer({
   useEffect(() => {
     if (tool === 'smart' && smartPoints.length > 0) requestPreview(smartPoints)
   }, [tool, smartPoints, requestPreview])
+
+  // Manual Polygon: commit (rasterise to a mask) on Enter / double-click; Esc cancels.
+  const createPolygonMutate = createPolygon.mutate
+  useEffect(() => {
+    if (tool !== 'polygon' || polygonPoints.length === 0) return
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
+      if (e.key === 'Enter' && polygonPoints.length >= 3) {
+        e.preventDefault()
+        createPolygonMutate(
+          { points: polygonPoints.map((p) => [p.x, p.y]) },
+          { onSuccess: () => setPolygonPoints([]) },
+        )
+      } else if (e.key === 'Escape') {
+        e.preventDefault()
+        setPolygonPoints([])
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [tool, polygonPoints, createPolygonMutate])
 
   // ResizeObserver: catches sidebar drags, browser zoom, and any container reflow.
   useLayoutEffect(() => {
@@ -173,11 +198,13 @@ export function CanvasViewer({
     setHoveredId(null)
     setCursorImg(null)
     setPreviewPolygon(null)
+    setPolygonPoints([])
   }
   if (prevTool !== tool) {
     setPrevTool(tool)
     setDragBox(null)
     setPreviewPolygon(null)
+    setPolygonPoints([])
   }
   // When committed points drop to zero (after Finish/Cancel), clear the ghost
   // once — but leave hover-driven previews (which keep smartPoints empty) alone.
@@ -319,10 +346,24 @@ export function CanvasViewer({
       onAddSmartPoint?.({ x: img.x, y: img.y, label: e.evt.shiftKey ? 0 : 1 })
       return
     }
+    if (tool === 'polygon') {
+      setPolygonPoints((pts) => [...pts, { x: img.x, y: img.y }])
+      return
+    }
     if (tool === 'point') {
       // Let MaskOverlay handle its own clicks; only fire on a background hit.
       if (e.target !== e.currentTarget && e.target.getClassName() !== 'Image') return
       inferPoint.mutate({ x: img.x, y: img.y, label: 1 })
+    }
+  }
+
+  // Double-click finishes a polygon (same as Enter).
+  const handleDblClick = () => {
+    if (tool === 'polygon' && polygonPoints.length >= 3) {
+      createPolygon.mutate(
+        { points: polygonPoints.map((p) => [p.x, p.y]) },
+        { onSuccess: () => setPolygonPoints([]) },
+      )
     }
   }
 
@@ -334,7 +375,7 @@ export function CanvasViewer({
   const handleZoomOut = () =>
     setView({ ...view, scale: clamp(view.scale / ZOOM_FACTOR, MIN_SCALE, MAX_SCALE) })
 
-  const busy = inferPoint.isPending || inferBox.isPending
+  const busy = inferPoint.isPending || inferBox.isPending || createPolygon.isPending
 
   // Crosshair guides follow the cursor while it is over the image and we are not
   // mid-pan, so the user can line up a click/box precisely.
@@ -365,6 +406,7 @@ export function CanvasViewer({
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseLeave}
         onClick={handleClick}
+        onDblClick={handleDblClick}
       >
         <Layer>
           {imageElement && (
@@ -382,10 +424,40 @@ export function CanvasViewer({
               annotations={annotations}
               selectedId={selectedAnnotationId}
               hoveredId={hoveredId}
-              interactive={tool !== 'smart'}
+              interactive={tool !== 'smart' && tool !== 'polygon'}
               onSelect={onSelectAnnotation}
               onHover={setHoveredId}
             />
+          )}
+          {tool === 'polygon' && polygonPoints.length > 0 && (
+            <>
+              <Line
+                points={[
+                  ...polygonPoints.flatMap((p) => [p.x, p.y]),
+                  ...(cursorImg ? [cursorImg.x, cursorImg.y] : []),
+                ]}
+                closed={polygonPoints.length >= 3}
+                stroke="rgba(217, 70, 239, 0.95)"
+                strokeWidth={1.5}
+                fill="rgba(217, 70, 239, 0.18)"
+                dash={[5, 4]}
+                strokeScaleEnabled={false}
+                listening={false}
+              />
+              {polygonPoints.map((p, i) => (
+                <Circle
+                  key={`poly-pt-${i}`}
+                  x={p.x}
+                  y={p.y}
+                  radius={4}
+                  fill="#d946ef"
+                  stroke="#ffffff"
+                  strokeWidth={1.5}
+                  strokeScaleEnabled={false}
+                  listening={false}
+                />
+              ))}
+            </>
           )}
           {tool === 'smart' &&
             previewPolygon?.map((poly, i) => (

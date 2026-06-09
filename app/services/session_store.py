@@ -301,6 +301,34 @@ class SessionStore:
                 self._persist()
         return removed
 
+    def copy_annotations(
+        self, source_image_id: str, dest_image_id: str
+    ) -> list[AnnotationRow]:
+        """Copy every annotation (and its mask) from one image to another.
+
+        Used by "Repeat previous": clone the prior image's annotations onto the
+        current one. Returns the newly created rows.
+        """
+        with self._lock:
+            sources = [a for a in self._data.annotations if a.image_id == source_image_id]
+        new_rows: list[AnnotationRow] = []
+        for src in sources:
+            # Each helper below takes the lock itself, so gather sources first.
+            mask = self.load_mask(src.annotation_id)
+            new_row = AnnotationRow(
+                annotation_id=self.make_annotation_id(),
+                image_id=dest_image_id,
+                polygon=src.polygon,
+                box=src.box,
+                label=src.label,
+                score=src.score,
+                is_crowd=src.is_crowd,
+                source=src.source,
+            )
+            self.add_annotation(new_row, mask=mask)
+            new_rows.append(new_row)
+        return new_rows
+
     def load_mask(self, annotation_id: str) -> np.ndarray | None:
         """Load the persisted boolean mask for an annotation, if any."""
         row = self.get_annotation(annotation_id)

@@ -85,7 +85,7 @@ class Annotation(BaseModel):
     approved: bool | None = Field(
         default=None, description="null = pending review; true = kept; false = rejected."
     )
-    source: Literal["auto", "point", "box"] = "auto"
+    source: Literal["auto", "point", "box", "polygon"] = "auto"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -147,6 +147,15 @@ class PreviewResponse(BaseModel):
     polygon: list[Polygon] = Field(description="Flat [x, y] pairs in absolute image pixels.")
     box: Box
     score: float = Field(ge=0.0, le=1.0)
+
+
+class PolygonRequest(BaseModel):
+    """Body for POST /api/images/{id}/annotations/polygon (manual polygon draw)."""
+
+    points: list[tuple[float, float]] = Field(
+        min_length=3, description="Polygon vertices as [[x, y], ...] in image pixels."
+    )
+    label: str | None = Field(default=None, description="Optional class label.")
 
 
 class AutoDetectRequest(BaseModel):
