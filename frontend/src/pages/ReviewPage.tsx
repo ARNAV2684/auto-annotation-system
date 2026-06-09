@@ -13,6 +13,7 @@ import { AutoDetectPanel } from '../components/AutoDetectPanel'
 import { CanvasViewer, type Tool } from '../components/CanvasViewer'
 import { DetectionList } from '../components/DetectionList'
 import { ImageList } from '../components/ImageList'
+import { ClassesPanel, LayersPanel, RawDataPanel, TagsPanel } from '../components/LeftPanels'
 import { ShortcutHelpOverlay } from '../components/ShortcutHelpOverlay'
 import { SmartSelectPanel } from '../components/SmartSelectPanel'
 import { ToolPalette } from '../components/ToolPalette'
@@ -25,6 +26,16 @@ interface ReviewPageProps {
   onBack: () => void
   onOpenExport: () => void
 }
+
+type LeftTab = 'images' | 'classes' | 'layers' | 'tags' | 'raw'
+
+const LEFT_TABS: { key: LeftTab; label: string }[] = [
+  { key: 'images', label: 'Images' },
+  { key: 'classes', label: 'Classes' },
+  { key: 'layers', label: 'Layers' },
+  { key: 'tags', label: 'Tags' },
+  { key: 'raw', label: 'Raw' },
+]
 
 /**
  * Three-column layout: left = image thumbnails, centre = canvas, right = controls
@@ -48,6 +59,7 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
   const [trainOpen, setTrainOpen] = useState(false)
+  const [leftTab, setLeftTab] = useState<LeftTab>('images')
   // Smart Select state, owned here so the canvas and the side panel share it.
   const [smartPoints, setSmartPoints] = useState<PointSpec[]>([])
   const [simplify, setSimplify] = useState(2)
@@ -254,20 +266,62 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
     // grid with sensible minimums: at narrow widths the page gets a horizontal
     // scrollbar instead of crushing the canvas column.
     <div className="grid h-full min-h-0 min-w-[900px] grid-cols-[240px_minmax(420px,1fr)_320px] overflow-auto">
-      {/* Left: image list */}
+      {/* Left: view-switcher (images / classes / layers / tags / raw) */}
       <aside className="flex min-h-0 min-w-0 flex-col border-r border-slate-200 bg-white">
-        <div className="flex flex-shrink-0 items-center justify-between border-b border-slate-200 px-3 py-2">
-          <span className="text-sm font-semibold text-slate-700">Images</span>
-          <button
-            type="button"
-            onClick={onBack}
-            className="text-xs text-slate-500 hover:text-slate-800"
-          >
-            ← upload
-          </button>
+        <div className="flex-shrink-0 border-b border-slate-200">
+          <div className="flex items-center justify-between px-3 pt-1.5">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Panel
+            </span>
+            <button
+              type="button"
+              onClick={onBack}
+              className="text-xs text-slate-500 hover:text-slate-800"
+            >
+              ← upload
+            </button>
+          </div>
+          <div className="flex gap-0.5 px-1 pb-1">
+            {LEFT_TABS.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setLeftTab(t.key)}
+                className={`flex-1 rounded px-1 py-0.5 text-xs transition ${
+                  leftTab === t.key
+                    ? 'bg-slate-800 text-white'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="min-h-0 flex-1 overflow-auto">
-          <ImageList selectedId={currentImageId} onSelect={setCurrentImageId} />
+          {leftTab === 'images' && (
+            <ImageList selectedId={currentImageId} onSelect={setCurrentImageId} />
+          )}
+          {leftTab === 'classes' && (
+            <ClassesPanel annotations={annotations ?? []} projectClasses={classes} />
+          )}
+          {leftTab === 'layers' && (
+            <LayersPanel
+              annotations={annotations ?? []}
+              selectedId={selectedAnnotationId}
+              onSelect={setSelectedAnnotationId}
+            />
+          )}
+          {leftTab === 'tags' &&
+            (currentImage ? (
+              <TagsPanel
+                tags={currentImage.tags}
+                onChange={(tags) => patchImage.mutate({ tags })}
+              />
+            ) : (
+              <p className="p-3 text-sm text-slate-500">Select an image first.</p>
+            ))}
+          {leftTab === 'raw' && <RawDataPanel annotations={annotations ?? []} />}
         </div>
       </aside>
 

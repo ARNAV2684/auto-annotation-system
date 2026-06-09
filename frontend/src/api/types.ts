@@ -21,10 +21,12 @@ export interface ImageRecord {
   num_detections: number
   num_approved: number
   done: boolean
+  tags: string[]
 }
 
 export interface ImagePatch {
   done?: boolean
+  tags?: string[]
 }
 
 export interface EmbedResponse {
