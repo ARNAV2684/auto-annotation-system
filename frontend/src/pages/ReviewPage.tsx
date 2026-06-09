@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   useAnnotations,
+  useCopyAnnotations,
+  useCreatePolygon,
   useDeleteAnnotation,
   useEmbed,
   useImages,
@@ -8,16 +10,25 @@ import {
   usePatchAnnotation,
   usePatchImage,
 } from '../api/hooks'
-import type { PointSpec, Project } from '../api/types'
+import type { Annotation, PointSpec, Project } from '../api/types'
 import { AutoDetectPanel } from '../components/AutoDetectPanel'
 import { CanvasViewer, type Tool } from '../components/CanvasViewer'
 import { DetectionList } from '../components/DetectionList'
 import { ImageList } from '../components/ImageList'
-import { ClassesPanel, LayersPanel, RawDataPanel, TagsPanel } from '../components/LeftPanels'
+import { LabelAssistPanel } from '../components/LabelAssistPanel'
+import {
+  AttributesPanel,
+  ClassesPanel,
+  HistoryPanel,
+  LayersPanel,
+  RawDataPanel,
+  TagsPanel,
+} from '../components/LeftPanels'
 import { ShortcutHelpOverlay } from '../components/ShortcutHelpOverlay'
 import { SmartSelectPanel } from '../components/SmartSelectPanel'
 import { ToolPalette } from '../components/ToolPalette'
 import { TopBar } from '../components/TopBar'
+import { useHistory } from '../components/useHistory'
 import { useKeyboardShortcuts, type Shortcut } from '../components/useKeyboardShortcuts'
 
 interface ReviewPageProps {
@@ -27,13 +38,15 @@ interface ReviewPageProps {
   onOpenExport: () => void
 }
 
-type LeftTab = 'images' | 'classes' | 'layers' | 'tags' | 'raw'
+type LeftTab = 'images' | 'classes' | 'layers' | 'tags' | 'attributes' | 'history' | 'raw'
 
 const LEFT_TABS: { key: LeftTab; label: string }[] = [
   { key: 'images', label: 'Images' },
   { key: 'classes', label: 'Classes' },
   { key: 'layers', label: 'Layers' },
   { key: 'tags', label: 'Tags' },
+  { key: 'attributes', label: 'Attrs' },
+  { key: 'history', label: 'History' },
   { key: 'raw', label: 'Raw' },
 ]
 
@@ -127,6 +140,84 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
   const patch = usePatchAnnotation()
   const del = useDeleteAnnotation()
   const patchImage = usePatchImage(currentImageId ?? '')
+  const createPolygon = useCreatePolygon(currentImageId ?? '')
+  const copyAnnotations = useCopyAnnotations(currentImageId ?? '')
+  const history = useHistory()
+
+  // Stable mutate fns + recorder, so the action callbacks below stay stable.
+  const patchMutate = patch.mutate
+  const delMutate = del.mutate
+  const createPolygonMutate = createPolygon.mutate
+  const { record: recordHistory } = history
+
+  // Review actions routed through here so each is recorded for undo/redo.
+  const setApprovedFor = useCallback(
+    (ann: Annotation, approved: boolean | null) => {
+      const before = ann.approved
+      patchMutate({ annotationId: ann.annotation_id, patch: { approved } })
+      recordHistory({
+        describe:
+          approved === true
+            ? 'Approve detection'
+            : approved === false
+              ? 'Reject detection'
+              : 'Clear review',
+        undo: () => patchMutate({ annotationId: ann.annotation_id, patch: { approved: before } }),
+        redo: () => patchMutate({ annotationId: ann.annotation_id, patch: { approved } }),
+      })
+    },
+    [patchMutate, recordHistory],
+  )
+  const setLabelFor = useCallback(
+    (ann: Annotation, label: string) => {
+      const before = ann.label
+      patchMutate({ annotationId: ann.annotation_id, patch: { label } })
+      recordHistory({
+        describe: `Label → ${label}`,
+        undo: () => patchMutate({ annotationId: ann.annotation_id, patch: { label: before } }),
+        redo: () => patchMutate({ annotationId: ann.annotation_id, patch: { label } }),
+      })
+    },
+    [patchMutate, recordHistory],
+  )
+  const deleteFor = useCallback(
+    (ann: Annotation) => {
+      delMutate({ annotationId: ann.annotation_id, imageId: ann.image_id })
+      if (selectedAnnotationId === ann.annotation_id) setSelectedAnnotationId(null)
+      // Undo recreates from the stored outline (best-effort: new id, mask re-
+      // rasterised from the first polygon); redo deletes the recreated one.
+      const recreated = { id: null as string | null }
+      recordHistory({
+        describe: 'Delete detection',
+        undo: () => {
+          const poly = ann.polygon[0]
+          if (!poly) return
+          const points: [number, number][] = []
+          for (let i = 0; i + 1 < poly.length; i += 2) points.push([poly[i], poly[i + 1]])
+          createPolygonMutate(
+            { points, label: ann.label },
+            {
+              onSuccess: (created) => {
+                recreated.id = created.annotation_id
+                if (ann.approved !== null) {
+                  patchMutate({
+                    annotationId: created.annotation_id,
+                    patch: { approved: ann.approved },
+                  })
+                }
+              },
+            },
+          )
+        },
+        redo: () =>
+          delMutate({ annotationId: recreated.id ?? ann.annotation_id, imageId: ann.image_id }),
+      })
+    },
+    [delMutate, createPolygonMutate, patchMutate, recordHistory, selectedAnnotationId],
+  )
+  const repeatPrevious = () => {
+    if (currentIndex > 0) copyAnnotations.mutate(imageList[currentIndex - 1].image_id)
+  }
 
   // Image navigator (also used by the Shift+N/P shortcuts).
   const imageList = images ?? []
@@ -160,19 +251,10 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
       setSelectedAnnotationId(anns[next].annotation_id)
     }
     const setApproved = (approved: boolean | null) => {
-      if (!selectedAnn) return
-      patch.mutate({
-        annotationId: selectedAnn.annotation_id,
-        patch: { approved },
-      })
+      if (selectedAnn) setApprovedFor(selectedAnn, approved)
     }
     const deleteSelected = () => {
-      if (!selectedAnn) return
-      del.mutate({
-        annotationId: selectedAnn.annotation_id,
-        imageId: selectedAnn.image_id,
-      })
-      setSelectedAnnotationId(null)
+      if (selectedAnn) deleteFor(selectedAnn)
     }
 
     return [
@@ -250,13 +332,41 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
         handler: () => setCurrentTool('box'),
       },
       {
+        combo: 'Shift+G',
+        label: 'Polygon tool',
+        group: 'Tools',
+        handler: () => setCurrentTool('polygon'),
+      },
+      {
         combo: 'Shift+E',
         label: 'Open export dialog',
         group: 'General',
         handler: onOpenExport,
       },
+      {
+        combo: 'Ctrl+Z',
+        label: 'Undo',
+        group: 'General',
+        handler: history.undo,
+      },
+      {
+        combo: 'Ctrl+Y',
+        label: 'Redo',
+        group: 'General',
+        handler: history.redo,
+      },
     ]
-  }, [images, annotations, currentImageId, selectedAnnotationId, patch, del, onOpenExport])
+  }, [
+    images,
+    annotations,
+    currentImageId,
+    selectedAnnotationId,
+    onOpenExport,
+    setApprovedFor,
+    deleteFor,
+    history.undo,
+    history.redo,
+  ])
 
   // Disable global shortcuts while the help overlay is open — it owns its own
   // dismiss listener so any key closes it instead of triggering a page action.
@@ -281,7 +391,7 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
               ← upload
             </button>
           </div>
-          <div className="flex gap-0.5 px-1 pb-1">
+          <div className="flex flex-wrap gap-0.5 px-1 pb-1">
             {LEFT_TABS.map((t) => (
               <button
                 key={t.key}
@@ -321,6 +431,14 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
             ) : (
               <p className="p-3 text-sm text-slate-500">Select an image first.</p>
             ))}
+          {leftTab === 'attributes' && (
+            <AttributesPanel
+              annotation={
+                (annotations ?? []).find((a) => a.annotation_id === selectedAnnotationId) ?? null
+              }
+            />
+          )}
+          {leftTab === 'history' && <HistoryPanel past={history.past} future={history.future} />}
           {leftTab === 'raw' && <RawDataPanel annotations={annotations ?? []} />}
         </div>
       </aside>
@@ -340,6 +458,26 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
             onTrain={() => setTrainOpen(true)}
           />
           <ToolPalette current={currentTool} onChange={setCurrentTool} />
+          <div className="flex flex-shrink-0 items-center gap-0.5">
+            <button
+              type="button"
+              onClick={history.undo}
+              disabled={!history.canUndo}
+              title="Undo (Ctrl+Z)"
+              className="grid h-7 w-7 place-items-center rounded border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              ↶
+            </button>
+            <button
+              type="button"
+              onClick={history.redo}
+              disabled={!history.canRedo}
+              title="Redo (Ctrl+Y)"
+              className="grid h-7 w-7 place-items-center rounded border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              ↷
+            </button>
+          </div>
           <button
             type="button"
             onClick={() => setHelpOpen(true)}
@@ -385,6 +523,18 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
         {currentImage && (
           <div className="flex-shrink-0">
             <AutoDetectPanel imageId={currentImage.image_id} project={project} />
+            <button
+              type="button"
+              onClick={repeatPrevious}
+              disabled={currentIndex <= 0 || copyAnnotations.isPending}
+              title="Copy the previous image's annotations onto this one"
+              className="mt-2 w-full rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              ⧉ Repeat previous image
+            </button>
+            <div className="mt-2">
+              <LabelAssistPanel />
+            </div>
           </div>
         )}
         <div className="min-h-0 flex-1">
@@ -394,6 +544,9 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
               classes={classes}
               selectedAnnotationId={selectedAnnotationId}
               onSelectAnnotation={setSelectedAnnotationId}
+              onSetApproved={setApprovedFor}
+              onSetLabel={setLabelFor}
+              onDelete={deleteFor}
             />
           )}
         </div>

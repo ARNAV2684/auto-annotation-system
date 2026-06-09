@@ -43,7 +43,7 @@ export interface Annotation {
   score: number
   is_crowd: boolean
   approved: boolean | null
-  source: 'auto' | 'point' | 'box'
+  source: 'auto' | 'point' | 'box' | 'polygon'
 }
 
 export interface PointRequest {
@@ -77,6 +77,11 @@ export interface PreviewResponse {
   polygon: Polygon[]
   box: Box
   score: number
+}
+
+export interface PolygonRequest {
+  points: [number, number][]
+  label?: string | null
 }
 
 export interface AutoDetectRequest {
