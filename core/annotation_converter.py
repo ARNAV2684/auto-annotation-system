@@ -52,6 +52,54 @@ def build_class_index(classes: list[str]) -> dict[str, int]:
     return {name: i for i, name in enumerate(classes)}
 
 
+def resolve_export_classes(config, project_id: str | None = None) -> tuple[list[str], list[str]]:
+    """Decide which class list (and crowd classes) an export should use.
+
+    This is the single policy point for "which classes does this export cover":
+
+    * ``project_id`` given -> that project's ``classes`` (raises :class:`KeyError`
+      if no project with that id exists). Class ids are scoped to this one
+      project, which is what downstream single-purpose training expects
+      (e.g. a road-defects YOLO with ``0=pothole, 1=crack, ...``).
+    * ``project_id`` is ``None`` -> the de-duplicated **union** of every
+      project's classes, first-seen order preserved. This keeps the legacy
+      "export everything" behaviour working so an annotation is never silently
+      dropped just because no project was named.
+    * No ``projects`` configured at all -> fall back to the flat legacy
+      ``classes`` key.
+
+    Args:
+        config: A :class:`~utils.config.Config` (or anything with ``.get``).
+        project_id: Optional project id to scope the export to.
+
+    Returns:
+        ``(classes, crowd_classes)``. ``crowd_classes`` always comes from the
+        global ``coco.crowd_classes`` key (crowd is a per-label property, not a
+        per-project one).
+
+    Raises:
+        KeyError: If ``project_id`` is given but no such project exists.
+    """
+    projects = config.get("projects") or []
+    crowd_classes = list(config.get("coco.crowd_classes", []) or [])
+
+    if project_id is not None:
+        match = next((p for p in projects if p.get("id") == project_id), None)
+        if match is None:
+            raise KeyError(project_id)
+        return list(match.get("classes", []) or []), crowd_classes
+
+    if projects:
+        # Dict preserves first-seen insertion order while de-duplicating.
+        seen: dict[str, None] = {}
+        for project in projects:
+            for class_name in project.get("classes", []) or []:
+                seen.setdefault(class_name, None)
+        return list(seen.keys()), crowd_classes
+
+    return list(config.get("classes", []) or []), crowd_classes
+
+
 def _normalise_label(label: str) -> str:
     """Convert a free-text label (e.g. ``"palm tree"``) to a config-style class name."""
     return label.strip().lower().replace(" ", "_")
@@ -394,6 +442,9 @@ def build_writers(
     output_root: Path,
     formats: list[str] | None = None,
     config=None,
+    *,
+    classes: list[str] | None = None,
+    crowd_classes: list[str] | None = None,
 ) -> dict[str, BaseWriter]:
     """Construct only the requested format writers, configured from ``config.yaml``.
 
@@ -401,13 +452,22 @@ def build_writers(
         output_root: Folder to create per-format subdirs under.
         formats: Subset of ``{"yolo", "coco", "voc"}``; ``None`` means all three.
         config: Optional :class:`~utils.config.Config`; defaults to the project config.
+        classes: Explicit class list to use (e.g. one project's classes). When
+            ``None``, falls back to the flat legacy ``classes`` config key — the
+            caller is expected to resolve project scoping via
+            :func:`resolve_export_classes`.
+        crowd_classes: Explicit crowd-class list. When ``None``, falls back to
+            ``coco.crowd_classes``.
 
     Returns:
         ``{format: writer}`` only for the requested formats (no empty dirs created
         for formats the user did not ask for).
     """
     cfg = config or load_config()
-    classes = cfg.get("classes", [])
+    if classes is None:
+        classes = cfg.get("classes", []) or []
+    if crowd_classes is None:
+        crowd_classes = cfg.get("coco.crowd_classes", []) or []
     polygon_epsilon = float(cfg.get("mask.polygon_epsilon", 2.0))
     requested = set(formats) if formats else {"yolo", "coco", "voc"}
     factories: dict[str, BaseWriter] = {}
@@ -422,7 +482,7 @@ def build_writers(
         factories["coco"] = CocoWriter(
             output_root / "coco",
             classes,
-            crowd_classes=cfg.get("coco.crowd_classes", []) or [],
+            crowd_classes=crowd_classes,
             supercategory=cfg.get("coco.supercategory", "object"),
             polygon_epsilon=polygon_epsilon,
         )

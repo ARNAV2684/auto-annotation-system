@@ -68,6 +68,8 @@ export type ExportFormat = 'yolo' | 'coco' | 'voc' | 'all'
 export interface ExportRequest {
   formats: ExportFormat[]
   only_approved: boolean
+  /** Scope export to one project's class list. null/omitted = union of all projects. */
+  project_id?: string | null
 }
 
 export interface ExportResponse {
@@ -75,6 +77,8 @@ export interface ExportResponse {
   num_images: number
   num_annotations_exported: number
   download_url: string
+  num_dropped: number
+  dropped_labels: string[]
 }
 
 export interface StatsResponse {

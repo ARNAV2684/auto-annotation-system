@@ -15,6 +15,11 @@ logger = logging.getLogger(__name__)
 def make_run_dir(root: Path, prefix: str = "run") -> Path:
     """Create and return a fresh timestamped subdirectory under ``root``.
 
+    The folder name is timestamped to the second. If two runs land in the same
+    second (a fast double-click, back-to-back tests, or concurrent users), a
+    numeric suffix (``_1``, ``_2`` …) is appended so each run still gets its own
+    directory instead of raising ``FileExistsError``.
+
     Args:
         root: Parent directory (created if missing).
         prefix: Prefix for the new folder name.
@@ -24,10 +29,16 @@ def make_run_dir(root: Path, prefix: str = "run") -> Path:
     """
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
-    name = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    run_dir = root / name
-    run_dir.mkdir(parents=True, exist_ok=False)
-    return run_dir
+    base = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    suffix = 0
+    while True:
+        name = base if suffix == 0 else f"{base}_{suffix}"
+        run_dir = root / name
+        try:
+            run_dir.mkdir(parents=True, exist_ok=False)
+            return run_dir
+        except FileExistsError:
+            suffix += 1
 
 
 def write_stats(path: Path, images, detections) -> None:
