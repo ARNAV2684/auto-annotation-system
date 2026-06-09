@@ -26,7 +26,9 @@ import type {
   ExportRequest,
   ExportResponse,
   HealthResponse,
+  ImagePatch,
   ImageRecord,
+  MultiPointRequest,
   PointRequest,
   Project,
   StatsResponse,
@@ -112,6 +114,14 @@ export function useUpload(): UseMutationResult<ImageRecord, Error, File> {
   })
 }
 
+export function usePatchImage(imageId: string): UseMutationResult<ImageRecord, Error, ImagePatch> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body) => patchJson<ImageRecord>(`/api/images/${imageId}`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.images }),
+  })
+}
+
 export function useEmbed(): UseMutationResult<EmbedResponse, Error, string> {
   return useMutation({
     mutationFn: (imageId: string) => postJson<EmbedResponse>(`/api/images/${imageId}/embed`, {}),
@@ -124,6 +134,20 @@ export function useInferPoint(
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (body) => postJson<Annotation[]>(`/api/images/${imageId}/infer/point`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.annotationsFor(imageId) })
+      qc.invalidateQueries({ queryKey: qk.images })
+      qc.invalidateQueries({ queryKey: qk.stats })
+    },
+  })
+}
+
+export function useInferPoints(
+  imageId: string,
+): UseMutationResult<Annotation[], Error, MultiPointRequest> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body) => postJson<Annotation[]>(`/api/images/${imageId}/infer/points`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.annotationsFor(imageId) })
       qc.invalidateQueries({ queryKey: qk.images })

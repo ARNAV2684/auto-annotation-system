@@ -20,6 +20,13 @@ export interface ImageRecord {
   height: number
   num_detections: number
   num_approved: number
+  done: boolean
+  tags: string[]
+}
+
+export interface ImagePatch {
+  done?: boolean
+  tags?: string[]
 }
 
 export interface EmbedResponse {
@@ -51,6 +58,25 @@ export interface BoxRequest {
   y1: number
   x2: number
   y2: number
+}
+
+/** One include/exclude point for Smart Select. */
+export interface PointSpec {
+  x: number
+  y: number
+  label: 0 | 1
+}
+
+export interface MultiPointRequest {
+  points: PointSpec[]
+  multimask?: boolean
+  simplify?: number | null
+}
+
+export interface PreviewResponse {
+  polygon: Polygon[]
+  box: Box
+  score: number
 }
 
 export interface AutoDetectRequest {

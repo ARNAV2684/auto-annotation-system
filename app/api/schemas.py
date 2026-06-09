@@ -42,6 +42,15 @@ class ImageRecord(BaseModel):
     height: int
     num_detections: int = 0
     num_approved: int = 0
+    done: bool = False
+    tags: list[str] = Field(default_factory=list)
+
+
+class ImagePatch(BaseModel):
+    """Body for PATCH /api/images/{id}. All fields optional."""
+
+    done: bool | None = None
+    tags: list[str] | None = None
 
 
 class EmbedResponse(BaseModel):
@@ -106,6 +115,38 @@ class BoxRequest(BaseModel):
     y1: float = Field(ge=0)
     x2: float = Field(ge=0)
     y2: float = Field(ge=0)
+
+
+class PointSpec(BaseModel):
+    """One include/exclude point for Smart Select."""
+
+    x: float = Field(ge=0)
+    y: float = Field(ge=0)
+    label: Literal[0, 1] = Field(
+        default=1, description="1 = include (foreground), 0 = exclude (background)."
+    )
+
+
+class MultiPointRequest(BaseModel):
+    """Body for the Smart Select preview/commit endpoints."""
+
+    points: list[PointSpec] = Field(
+        min_length=1, description="Accumulated include/exclude points."
+    )
+    multimask: bool = Field(default=False)
+    simplify: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Polygon simplification tolerance (px). None = config default.",
+    )
+
+
+class PreviewResponse(BaseModel):
+    """Returned by /api/images/{id}/infer/preview — geometry only, not persisted."""
+
+    polygon: list[Polygon] = Field(description="Flat [x, y] pairs in absolute image pixels.")
+    box: Box
+    score: float = Field(ge=0.0, le=1.0)
 
 
 class AutoDetectRequest(BaseModel):

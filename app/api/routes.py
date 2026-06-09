@@ -33,8 +33,11 @@ from app.api.schemas import (
     ExportRequest,
     ExportResponse,
     HealthResponse,
+    ImagePatch,
     ImageRecord,
+    MultiPointRequest,
     PointRequest,
+    PreviewResponse,
     Project,
     StatsResponse,
 )
@@ -123,12 +126,19 @@ def _image_record(image: ImageRow, num_detections: int, num_approved: int) -> Im
         height=image.height,
         num_detections=num_detections,
         num_approved=num_approved,
+        done=image.done,
+        tags=list(image.tags),
     )
 
 
-def _polygon_from_mask(mask: np.ndarray) -> list[list[float]]:
-    """Convert a boolean mask to one or more flat polygons (floats)."""
-    epsilon = float(load_config().get("mask.polygon_epsilon", 2.0))
+def _polygon_from_mask(mask: np.ndarray, epsilon: float | None = None) -> list[list[float]]:
+    """Convert a boolean mask to one or more flat polygons (floats).
+
+    ``epsilon`` overrides the Douglas-Peucker simplification tolerance (driven by
+    the Smart Select "Simplify" slider); ``None`` uses the config default.
+    """
+    if epsilon is None:
+        epsilon = float(load_config().get("mask.polygon_epsilon", 2.0))
     return [[float(v) for v in poly] for poly in mask_to_polygon(mask, epsilon=epsilon)]
 
 
@@ -139,9 +149,10 @@ def _persist_annotation(
     score: float,
     label: str,
     source: str,
+    epsilon: float | None = None,
 ) -> AnnotationRow:
     """Build an :class:`AnnotationRow` from a mask + metadata, persist it, return it."""
-    polygon = _polygon_from_mask(mask)
+    polygon = _polygon_from_mask(mask, epsilon=epsilon)
     bbox = mask_to_bbox(mask)
     if bbox is None:
         ys, xs = np.where(mask)
@@ -225,6 +236,16 @@ def list_images(store: StoreDep) -> list[ImageRecord]:
     return out
 
 
+@router.patch("/images/{image_id}", response_model=ImageRecord)
+def patch_image(image_id: str, body: ImagePatch, store: StoreDep) -> ImageRecord:
+    """Update image-level fields — currently the 'done / reviewed' flag."""
+    row = store.update_image(image_id, done=body.done, tags=body.tags)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Unknown image_id: {image_id}")
+    total, approved = _counts_for_image(store, image_id)
+    return _image_record(row, total, approved)
+
+
 @router.get("/images/{image_id}/file")
 def get_image_file(image_id: str, store: StoreDep) -> FileResponse:
     """Return the raw image bytes so the canvas can draw it."""
@@ -267,6 +288,48 @@ def infer_point(
         for mask, score in zip(masks, scores, strict=True)
     ]
     return [_annotation_from_row(r) for r in rows]
+
+
+@router.post("/images/{image_id}/infer/preview", response_model=PreviewResponse)
+def infer_preview(
+    image_id: str, body: MultiPointRequest, store: StoreDep, models: ModelsDep
+) -> PreviewResponse:
+    """Smart Select preview: segment from accumulated points WITHOUT persisting.
+
+    Used for the hover ghost and the live in-progress mask, so it must stay cheap
+    and side-effect free.
+    """
+    _ensure_image_loaded(models, store, image_id)
+    points = [(p.x, p.y) for p in body.points]
+    labels = [p.label for p in body.points]
+    masks, scores = models.predict_points(points, labels, multimask=body.multimask)
+    mask, score = masks[0], scores[0]
+    bbox = mask_to_bbox(mask) or (0.0, 0.0, 0.0, 0.0)
+    return PreviewResponse(
+        polygon=_polygon_from_mask(mask, epsilon=body.simplify),
+        box=tuple(float(v) for v in bbox),
+        score=float(score),
+    )
+
+
+@router.post(
+    "/images/{image_id}/infer/points",
+    response_model=list[Annotation],
+    status_code=status.HTTP_201_CREATED,
+)
+def infer_points(
+    image_id: str, body: MultiPointRequest, store: StoreDep, models: ModelsDep
+) -> list[Annotation]:
+    """Smart Select commit: persist the best mask from the accumulated points."""
+    _ensure_image_loaded(models, store, image_id)
+    points = [(p.x, p.y) for p in body.points]
+    labels = [p.label for p in body.points]
+    masks, scores = models.predict_points(points, labels, multimask=body.multimask)
+    row = _persist_annotation(
+        store, image_id, masks[0], scores[0],
+        label="unlabeled", source="point", epsilon=body.simplify,
+    )
+    return [_annotation_from_row(row)]
 
 
 @router.post(

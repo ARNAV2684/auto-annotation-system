@@ -107,6 +107,19 @@ class ModelRegistry:
             )
         return [m for m in masks], [float(s) for s in scores]
 
+    def predict_points(
+        self,
+        points: list[tuple[float, float]],
+        labels: list[int],
+        multimask: bool = False,
+    ) -> tuple[list[np.ndarray], list[float]]:
+        """Return ``(masks_best_first, scores_best_first)`` from several points."""
+        with self._lock:
+            masks, scores = self.segmenter.predict_points(
+                [(int(x), int(y)) for x, y in points], labels, multimask=multimask
+            )
+        return [m for m in masks], [float(s) for s in scores]
+
     def predict_box(self, box: tuple[float, float, float, float]) -> tuple[np.ndarray, float]:
         """Return ``(mask, score)`` from a single box prompt."""
         with self._lock:
