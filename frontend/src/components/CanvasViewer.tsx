@@ -3,7 +3,7 @@ import type { KonvaEventObject } from 'konva/lib/Node'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Circle, Image as KonvaImage, Layer, Line, Rect, Stage } from 'react-konva'
 import { useAnnotations, useCreatePolygon, useInferBox, useInferPoint } from '../api/hooks'
-import type { Annotation, ImageRecord, PointSpec, Polygon } from '../api/types'
+import type { Annotation, ImageRecord, Polygon, SmartObject } from '../api/types'
 import { MaskOverlay } from './MaskOverlay'
 import { useImageElement } from './useImageElement'
 
@@ -14,11 +14,9 @@ interface CanvasViewerProps {
   tool: Tool
   selectedAnnotationId: string | null
   onSelectAnnotation: (id: string | null) => void
-  /** Smart Select state (owned by ReviewPage so the side panel can share it). */
-  smartPoints?: PointSpec[]
-  onAddSmartPoint?: (point: PointSpec) => void
-  /** Polygon simplification tolerance for the Smart Select preview. */
-  simplify?: number
+  /** Smart Select collected objects (owned by ReviewPage so the panel shares them). */
+  smartObjects?: SmartObject[]
+  onAddSmartObject?: (object: SmartObject) => void
   /** Fired with newly-created annotations so the parent can record undo history. */
   onAnnotationsCreated?: (created: Annotation[]) => void
 }
@@ -74,9 +72,8 @@ export function CanvasViewer({
   tool,
   selectedAnnotationId,
   onSelectAnnotation,
-  smartPoints = [],
-  onAddSmartPoint,
-  simplify,
+  smartObjects = [],
+  onAddSmartObject,
   onAnnotationsCreated,
 }: CanvasViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -84,9 +81,9 @@ export function CanvasViewer({
   const [stageSize, setStageSize] = useState({ width: 800, height: 600 })
   const [view, setView] = useState<ViewTransform>({ scale: 1, panX: 0, panY: 0 })
   const [dragBox, setDragBox] = useState<DragBox | null>(null)
-  // Smart Select ghost preview polygon (geometry only; never persisted here).
+  // Smart Select ghost preview polygon for the object under the cursor (geometry
+  // only; never persisted here).
   const [previewPolygon, setPreviewPolygon] = useState<Polygon[] | null>(null)
-  const [prevSmartLen, setPrevSmartLen] = useState(0)
   const previewAbort = useRef<AbortController | null>(null)
   const lastPreviewAt = useRef(0)
   // Manual Polygon tool: vertices accumulated for the current draw.
@@ -111,18 +108,17 @@ export function CanvasViewer({
   const inferBox = useInferBox(image.image_id)
   const createPolygon = useCreatePolygon(image.image_id)
 
-  // Smart Select preview: a cheap, non-persisting SAM call. Stale requests are
-  // aborted so only the latest hover/point set paints the ghost mask.
+  // Smart Select preview: a cheap, non-persisting SAM call at the hovered point.
+  // Stale requests are aborted so only the latest cursor position paints the ghost.
   const requestPreview = useCallback(
-    (points: PointSpec[]) => {
-      if (points.length === 0) return
+    (x: number, y: number) => {
       previewAbort.current?.abort()
       const controller = new AbortController()
       previewAbort.current = controller
       fetch(`/api/images/${image.image_id}/infer/preview`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ points, simplify: simplify ?? null }),
+        body: JSON.stringify({ points: [{ x, y, label: 1 }] }),
         signal: controller.signal,
       })
         .then((r) => (r.ok ? r.json() : null))
@@ -133,16 +129,8 @@ export function CanvasViewer({
           /* aborted or failed — leave the previous preview in place */
         })
     },
-    [image.image_id, simplify],
+    [image.image_id],
   )
-
-  // Once points are committed (clicked), the preview tracks them (and re-runs
-  // when Simplify changes). requestPreview clears the ghost when the list is
-  // empty; switching tools clears it via the derive-during-render block below.
-  // Hover-driven preview is handled in handleMouseMove.
-  useEffect(() => {
-    if (tool === 'smart' && smartPoints.length > 0) requestPreview(smartPoints)
-  }, [tool, smartPoints, requestPreview])
 
   // Manual Polygon: commit (rasterise to a mask) on Enter / double-click; Esc cancels.
   const createPolygonMutate = createPolygon.mutate
@@ -213,12 +201,6 @@ export function CanvasViewer({
     setDragBox(null)
     setPreviewPolygon(null)
     setPolygonPoints([])
-  }
-  // When committed points drop to zero (after Finish/Cancel), clear the ghost
-  // once — but leave hover-driven previews (which keep smartPoints empty) alone.
-  if (prevSmartLen !== smartPoints.length) {
-    setPrevSmartLen(smartPoints.length)
-    if (smartPoints.length === 0) setPreviewPolygon(null)
   }
 
   // Cursor: pan trumps tool style.
@@ -293,9 +275,10 @@ export function CanvasViewer({
       setDragBox({ ...dragBox, x2: img.x, y2: img.y })
       return
     }
-    // Smart Select hover preview: only while no points are committed yet, so the
-    // ghost mask follows the cursor. Throttled to keep SAM calls reasonable.
-    if (tool === 'smart' && img && smartPoints.length === 0 && imageElement) {
+    // Smart Select hover preview: the ghost mask follows the cursor over each
+    // object (always, so you can preview the next object right after collecting
+    // one). Throttled to keep SAM calls reasonable.
+    if (tool === 'smart' && img && imageElement) {
       const inBounds =
         img.x >= 0 &&
         img.y >= 0 &&
@@ -304,7 +287,7 @@ export function CanvasViewer({
       const now = performance.now()
       if (inBounds && now - lastPreviewAt.current > 120) {
         lastPreviewAt.current = now
-        requestPreview([{ x: img.x, y: img.y, label: 1 }])
+        requestPreview(img.x, img.y)
       }
     }
   }
@@ -352,9 +335,9 @@ export function CanvasViewer({
       return
     }
     if (tool === 'smart') {
-      // Masks are non-interactive in Smart mode, so the click lands here:
-      // left = include point, Shift = exclude point.
-      onAddSmartPoint?.({ x: img.x, y: img.y, label: e.evt.shiftKey ? 0 : 1 })
+      // Collect the object currently under the cursor (its previewed outline),
+      // then keep hovering for the next one.
+      onAddSmartObject?.({ x: img.x, y: img.y, polygon: previewPolygon ?? [] })
       return
     }
     if (tool === 'polygon') {
@@ -478,30 +461,46 @@ export function CanvasViewer({
               ))}
             </>
           )}
+          {/* Smart Select: collected objects (solid) + live hover ghost (dashed). */}
+          {tool === 'smart' &&
+            smartObjects.flatMap((obj, oi) =>
+              obj.polygon.map((poly, pi) => (
+                <Line
+                  key={`collected-${oi}-${pi}`}
+                  points={poly}
+                  closed
+                  fill="rgba(14, 165, 233, 0.35)"
+                  stroke="rgba(2, 132, 199, 1)"
+                  strokeWidth={2}
+                  strokeScaleEnabled={false}
+                  listening={false}
+                />
+              )),
+            )}
+          {tool === 'smart' &&
+            smartObjects.map((obj, i) => (
+              <Circle
+                key={`collected-pt-${i}`}
+                x={obj.x}
+                y={obj.y}
+                radius={4}
+                fill="#0284c7"
+                stroke="#ffffff"
+                strokeWidth={1.5}
+                strokeScaleEnabled={false}
+                listening={false}
+              />
+            ))}
           {tool === 'smart' &&
             previewPolygon?.map((poly, i) => (
               <Line
                 key={`preview-${i}`}
                 points={poly}
                 closed
-                fill="rgba(14, 165, 233, 0.25)"
+                fill="rgba(14, 165, 233, 0.2)"
                 stroke="rgba(14, 165, 233, 0.95)"
                 strokeWidth={1.5}
                 dash={[5, 4]}
-                strokeScaleEnabled={false}
-                listening={false}
-              />
-            ))}
-          {tool === 'smart' &&
-            smartPoints.map((p, i) => (
-              <Circle
-                key={`pt-${i}`}
-                x={p.x}
-                y={p.y}
-                radius={4}
-                fill={p.label === 1 ? '#22c55e' : '#ef4444'}
-                stroke="#ffffff"
-                strokeWidth={1.5}
                 strokeScaleEnabled={false}
                 listening={false}
               />
