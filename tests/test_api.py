@@ -27,7 +27,9 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.api import routes  # noqa: E402
 from app.main import app  # noqa: E402
 from app.services.model_registry import get_model_registry  # noqa: E402
+from app.services.project_store import ProjectStore  # noqa: E402
 from app.services.session_store import SessionStore  # noqa: E402
+from core.annotation_converter import resolve_export_classes  # noqa: E402
 from utils.config import load_config  # noqa: E402
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -88,6 +90,8 @@ def client(tmp_path: Path) -> TestClient:
     """A TestClient with the model registry stubbed and session storage in tmp_path."""
     store = SessionStore(root=tmp_path / "sessions")
     routes._session_singleton = store  # private but used only by get_session_store
+    # Isolated project store per test, freshly seeded from config into tmp_path.
+    routes._project_store_singleton = ProjectStore(path=tmp_path / "projects.json")
     # Build the stub ONCE so cache state (current image_id) persists across requests.
     stub_registry = StubModelRegistry()
     app.dependency_overrides[get_model_registry] = lambda: stub_registry
@@ -95,6 +99,7 @@ def client(tmp_path: Path) -> TestClient:
         yield c
     app.dependency_overrides.clear()
     routes._session_singleton = None
+    routes._project_store_singleton = None
 
 
 @pytest.fixture
@@ -316,6 +321,112 @@ def test_projects_road_defects_has_culvert(client: TestClient) -> None:
     rd = next(p for p in projects if p["id"] == "road_defects")
     assert "culvert" in rd["classes"]
     assert "pothole" in rd["classes"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Project creation + class registration (PR O)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_create_project_adds_new_group(client: TestClient) -> None:
+    response = client.post(
+        "/api/projects", json={"label": "Buildings", "classes": ["house", "Shed"]}
+    )
+    assert response.status_code == 201
+    project = response.json()
+    assert project["id"] == "buildings"
+    assert project["label"] == "Buildings"
+    assert project["classes"] == ["house", "shed"]  # normalised
+    # And it shows up in the listing.
+    ids = {p["id"] for p in client.get("/api/projects").json()}
+    assert "buildings" in ids
+
+
+def test_create_project_rejects_empty_label(client: TestClient) -> None:
+    assert client.post("/api/projects", json={"label": "   "}).status_code == 422
+
+
+def test_create_project_rejects_duplicate(client: TestClient) -> None:
+    # 'Vegetation' is seeded from config.
+    assert client.post("/api/projects", json={"label": "Vegetation"}).status_code == 422
+
+
+def test_add_class_to_existing_project(client: TestClient) -> None:
+    response = client.post("/api/projects/infrastructure/classes", json={"name": "house"})
+    assert response.status_code == 200
+    assert "house" in response.json()["classes"]
+
+
+def test_add_class_normalises_name(client: TestClient) -> None:
+    project = client.post(
+        "/api/projects/infrastructure/classes", json={"name": "Water Tank"}
+    ).json()
+    assert "water_tank" in project["classes"]
+
+
+def test_add_class_is_idempotent(client: TestClient) -> None:
+    client.post("/api/projects/infrastructure/classes", json={"name": "house"})
+    project = client.post(
+        "/api/projects/infrastructure/classes", json={"name": "house"}
+    ).json()
+    assert project["classes"].count("house") == 1
+
+
+def test_add_class_unknown_project_404(client: TestClient) -> None:
+    response = client.post("/api/projects/nope/classes", json={"name": "house"})
+    assert response.status_code == 404
+
+
+def test_add_class_rejects_empty_name(client: TestClient) -> None:
+    response = client.post("/api/projects/infrastructure/classes", json={"name": "  "})
+    assert response.status_code == 422
+
+
+def test_register_class_then_export_includes_it(
+    client: TestClient, png_bytes: bytes
+) -> None:
+    # The end-to-end loop: register 'house' under infrastructure, label an
+    # annotation 'house', approve it, export the infrastructure project -> it
+    # comes through (num_dropped == 0) instead of being skipped.
+    client.post("/api/projects/infrastructure/classes", json={"name": "house"})
+    image_id = _upload(client, png_bytes)["image_id"]
+    _approved_ann_with_label(client, image_id, "house")
+    body = client.post(
+        "/api/export",
+        json={"formats": ["yolo"], "only_approved": True, "project_id": "infrastructure"},
+    ).json()
+    assert body["num_annotations_exported"] == 1
+    assert body["num_dropped"] == 0
+
+
+# resolve_export_classes is a pure function — unit-test it directly.
+
+def test_resolve_export_classes_scopes_to_project() -> None:
+    projects = [{"id": "a", "classes": ["x", "y"]}, {"id": "b", "classes": ["z"]}]
+    classes, crowd = resolve_export_classes(projects, "a")
+    assert classes == ["x", "y"] and crowd == []
+
+
+def test_resolve_export_classes_union_dedups_preserving_order() -> None:
+    projects = [{"id": "a", "classes": ["x", "y"]}, {"id": "b", "classes": ["y", "z"]}]
+    classes, _ = resolve_export_classes(projects, None)
+    assert classes == ["x", "y", "z"]
+
+
+def test_resolve_export_classes_unknown_project_raises() -> None:
+    with pytest.raises(KeyError):
+        resolve_export_classes([{"id": "a", "classes": ["x"]}], "missing")
+
+
+def test_resolve_export_classes_legacy_fallback() -> None:
+    classes, _ = resolve_export_classes([], None, legacy_classes=["l1", "l2"])
+    assert classes == ["l1", "l2"]
+
+
+def test_resolve_export_classes_passes_crowd_through() -> None:
+    _, crowd = resolve_export_classes(
+        [{"id": "a", "classes": ["x"]}], "a", crowd_classes=["c"]
+    )
+    assert crowd == ["c"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

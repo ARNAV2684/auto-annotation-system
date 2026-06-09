@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, Response
 
 from app.api.schemas import (
+    AddClassRequest,
     Annotation,
     AnnotationPatch,
     AutoDetectRequest,
@@ -27,6 +28,7 @@ from app.api.schemas import (
     BulkAnnotationError,
     BulkAnnotationRequest,
     BulkAnnotationResponse,
+    CreateProjectRequest,
     EmbedResponse,
     ExportRequest,
     ExportResponse,
@@ -37,11 +39,13 @@ from app.api.schemas import (
     StatsResponse,
 )
 from app.services.model_registry import ModelRegistry, get_model_registry
+from app.services.project_store import ProjectStore
 from app.services.session_store import AnnotationRow, ImageRow, SessionStore
 from core.annotation_converter import (
     ExportImage,
     build_class_index,
     build_writers,
+    normalise_label,
     resolve_class_id,
     resolve_export_classes,
 )
@@ -69,6 +73,7 @@ _IMAGE_CONTENT_TYPES = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 _session_singleton: SessionStore | None = None
+_project_store_singleton: ProjectStore | None = None
 
 
 def get_session_store() -> SessionStore:
@@ -79,7 +84,16 @@ def get_session_store() -> SessionStore:
     return _session_singleton
 
 
+def get_project_store() -> ProjectStore:
+    """FastAPI dependency: a process-wide :class:`ProjectStore` singleton."""
+    global _project_store_singleton
+    if _project_store_singleton is None:
+        _project_store_singleton = ProjectStore()
+    return _project_store_singleton
+
+
 StoreDep = Annotated[SessionStore, Depends(get_session_store)]
+ProjectStoreDep = Annotated[ProjectStore, Depends(get_project_store)]
 ModelsDep = Annotated[ModelRegistry, Depends(get_model_registry)]
 
 
@@ -316,7 +330,7 @@ def patch_annotation(
     sensible non-empty label is accepted. The frontend dropdown is the policy.
     """
     if body.label is not None:
-        normalised = body.label.strip().lower().replace(" ", "_")
+        normalised = normalise_label(body.label)
         if not normalised:
             raise HTTPException(status_code=422, detail="Label cannot be empty.")
         if len(normalised) > _MAX_LABEL_LEN:
@@ -377,7 +391,9 @@ def bulk_annotations(
 @router.post(
     "/export", response_model=ExportResponse, status_code=status.HTTP_201_CREATED
 )
-def export(body: ExportRequest, store: StoreDep) -> ExportResponse:
+def export(
+    body: ExportRequest, store: StoreDep, project_store: ProjectStoreDep
+) -> ExportResponse:
     cfg = load_config()
     formats = (
         ["yolo", "coco", "voc"]
@@ -388,11 +404,17 @@ def export(body: ExportRequest, store: StoreDep) -> ExportResponse:
         raise HTTPException(status_code=422, detail="At least one format must be requested.")
 
     # Decide which class list this export covers (one project, or the union of
-    # all projects when none is named). This is the fix for "blank exports":
-    # previously every label was matched against the legacy 3-class list, so any
-    # road-defect / infrastructure label silently resolved to nothing.
+    # all projects when none is named), reading the LIVE project store so a
+    # class registered moments ago is exportable. This is the fix for "blank
+    # exports": previously every label was matched against the legacy 3-class
+    # list, so any road-defect / infrastructure label silently resolved to nothing.
     try:
-        classes, crowd_classes = resolve_export_classes(cfg, body.project_id)
+        classes, crowd_classes = resolve_export_classes(
+            project_store.list_projects(),
+            body.project_id,
+            crowd_classes=cfg.get("coco.crowd_classes", []) or [],
+            legacy_classes=cfg.get("classes", []) or [],
+        )
     except KeyError as exc:
         raise HTTPException(
             status_code=422, detail=f"Unknown project_id: {body.project_id}"
@@ -492,24 +514,43 @@ def download_export(run_id: str) -> FileResponse:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/projects", response_model=list[Project])
-def list_projects() -> list[Project]:
-    """Return the configured projects (UI presets). Falls back to a single
-    "default" project built from the legacy ``classes`` key when ``projects``
-    is empty or missing.
+def list_projects(store: ProjectStoreDep) -> list[Project]:
+    """Return every project (UI preset) from the live project store.
+
+    The store seeds itself from ``config.yaml`` on first run and then owns the
+    list, so this reflects any groups/classes the user created at runtime.
     """
-    cfg = load_config()
-    raw = cfg.get("projects") or []
-    if raw:
-        return [Project(**entry) for entry in raw]
-    legacy_classes = cfg.get("classes", []) or []
-    return [
-        Project(
-            id="default",
-            label="Default",
-            classes=list(legacy_classes),
-            default_prompts=list(legacy_classes),
+    return [Project(**p) for p in store.list_projects()]
+
+
+@router.post("/projects", response_model=Project, status_code=status.HTTP_201_CREATED)
+def create_project(body: CreateProjectRequest, store: ProjectStoreDep) -> Project:
+    """Create a brand-new group (project)."""
+    try:
+        project = store.create_project(
+            label=body.label,
+            classes=body.classes,
+            default_prompts=body.default_prompts,
         )
-    ]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return Project(**project)
+
+
+@router.post("/projects/{project_id}/classes", response_model=Project)
+def add_project_class(
+    project_id: str, body: AddClassRequest, store: ProjectStoreDep
+) -> Project:
+    """Register a class (label) under an existing group."""
+    try:
+        project = store.add_class(project_id, body.name)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown project_id: {project_id}"
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return Project(**project)
 
 
 @router.get("/stats", response_model=StatsResponse)

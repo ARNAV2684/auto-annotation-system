@@ -245,6 +245,24 @@ class Project(BaseModel):
     )
 
 
+class CreateProjectRequest(BaseModel):
+    """Body for POST /api/projects — create a brand-new group."""
+
+    label: str = Field(description="Human-readable group name, e.g. 'Buildings'.")
+    classes: list[str] = Field(
+        default_factory=list, description="Optional initial class labels."
+    )
+    default_prompts: list[str] = Field(
+        default_factory=list, description="Optional auto-detect prompt presets."
+    )
+
+
+class AddClassRequest(BaseModel):
+    """Body for POST /api/projects/{id}/classes — register a class under a group."""
+
+    name: str = Field(description="Class label to register, e.g. 'house'.")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Simple acknowledgement
 # ─────────────────────────────────────────────────────────────────────────────
