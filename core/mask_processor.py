@@ -42,6 +42,24 @@ def compute_iou(box_a: Box, box_b: Box) -> float:
     return inter / union if union > 0 else 0.0
 
 
+def polygon_to_mask(
+    polygon: list[tuple[float, float]], width: int, height: int
+) -> np.ndarray:
+    """Rasterize a polygon into a boolean ``height x width`` mask.
+
+    Used by the manual Polygon tool: the user draws an outline and we fill it
+    into a mask so the annotation is stored exactly like a SAM one (mask +
+    polygon + box). Fewer than 3 vertices yields an empty mask.
+    """
+    mask = np.zeros((height, width), dtype=np.uint8)
+    if len(polygon) >= 3:
+        pts = np.array(
+            [[(int(round(x)), int(round(y))) for x, y in polygon]], dtype=np.int32
+        )
+        cv2.fillPoly(mask, pts, color=1)
+    return mask.astype(bool)
+
+
 def nms(
     boxes: list[Box], scores: list[float], iou_threshold: float = 0.5
 ) -> list[int]:

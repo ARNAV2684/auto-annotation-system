@@ -37,6 +37,7 @@ from app.api.schemas import (
     ImageRecord,
     MultiPointRequest,
     PointRequest,
+    PolygonRequest,
     PreviewResponse,
     Project,
     StatsResponse,
@@ -52,7 +53,7 @@ from core.annotation_converter import (
     resolve_class_id,
     resolve_export_classes,
 )
-from core.mask_processor import mask_to_bbox, mask_to_polygon
+from core.mask_processor import mask_to_bbox, mask_to_polygon, polygon_to_mask
 from core.types import Detection
 from utils.config import load_config
 from utils.file_handler import make_run_dir, write_stats, zip_directory
@@ -347,6 +348,45 @@ def infer_box(
     mask, score = models.predict_box((body.x1, body.y1, body.x2, body.y2))
     row = _persist_annotation(store, image_id, mask, score, label="unlabeled", source="box")
     return _annotation_from_row(row)
+
+
+@router.post(
+    "/images/{image_id}/annotations/polygon",
+    response_model=Annotation,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_polygon(image_id: str, body: PolygonRequest, store: StoreDep) -> Annotation:
+    """Persist a hand-drawn polygon as an annotation (rasterised to a mask).
+
+    This is the manual escape hatch for objects SAM can't grab — the outline is
+    filled into a mask so the annotation stores and exports exactly like a SAM one.
+    """
+    image = store.get_image(image_id)
+    if image is None:
+        raise HTTPException(status_code=404, detail=f"Unknown image_id: {image_id}")
+    mask = polygon_to_mask(
+        [(float(x), float(y)) for x, y in body.points], image.width, image.height
+    )
+    if not mask.any():
+        raise HTTPException(status_code=422, detail="Polygon is empty or degenerate.")
+    label = normalise_label(body.label) if body.label else "unlabeled"
+    row = _persist_annotation(store, image_id, mask, score=1.0, label=label, source="polygon")
+    return _annotation_from_row(row)
+
+
+@router.post(
+    "/images/{image_id}/annotations/copy-from/{source_id}",
+    response_model=list[Annotation],
+    status_code=status.HTTP_201_CREATED,
+)
+def copy_annotations(image_id: str, source_id: str, store: StoreDep) -> list[Annotation]:
+    """Copy every annotation from ``source_id`` onto ``image_id`` (Repeat previous)."""
+    if store.get_image(image_id) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown image_id: {image_id}")
+    if store.get_image(source_id) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown source image: {source_id}")
+    rows = store.copy_annotations(source_id, image_id)
+    return [_annotation_from_row(r) for r in rows]
 
 
 @router.post(
