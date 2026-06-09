@@ -70,6 +70,13 @@ class StubModelRegistry:
         mask[max(0, y1):min(40, y2), max(0, x1):min(40, x2)] = True
         return (mask, 0.77)
 
+    def predict_points(
+        self, points, labels, multimask: bool = False
+    ) -> tuple[list[np.ndarray], list[float]]:
+        mask = np.zeros((40, 40), dtype=bool)
+        mask[5:25, 5:25] = True
+        return ([mask], [0.88])
+
     def auto_detect(self, image_path: Path, prompts) -> list[Any]:
         big = np.zeros((40, 40), dtype=bool)
         big[10:30, 10:30] = True
@@ -227,6 +234,47 @@ def test_auto_detect_replaces_previous_auto_annotations(
     assert {r["annotation_id"] for r in first}.isdisjoint(
         {r["annotation_id"] for r in second}
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Smart Select (multi-point preview + commit) — PR Q
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_preview_returns_polygon_without_persisting(
+    client: TestClient, png_bytes: bytes
+) -> None:
+    image_id = _upload(client, png_bytes)["image_id"]
+    response = client.post(
+        f"/api/images/{image_id}/infer/preview",
+        json={"points": [{"x": 15, "y": 15, "label": 1}]},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["polygon"] and isinstance(body["polygon"][0], list)
+    assert 0.0 <= body["score"] <= 1.0
+    # Preview must NOT create an annotation.
+    assert client.get(f"/api/images/{image_id}/annotations").json() == []
+
+
+def test_infer_points_commits_one_annotation(client: TestClient, png_bytes: bytes) -> None:
+    image_id = _upload(client, png_bytes)["image_id"]
+    rows = client.post(
+        f"/api/images/{image_id}/infer/points",
+        json={"points": [{"x": 15, "y": 15, "label": 1}, {"x": 8, "y": 8, "label": 0}]},
+    ).json()
+    assert len(rows) == 1
+    assert rows[0]["source"] == "point"
+    assert client.get(f"/api/images/{image_id}/annotations").json()[0]["annotation_id"] == (
+        rows[0]["annotation_id"]
+    )
+
+
+def test_preview_rejects_empty_points(client: TestClient, png_bytes: bytes) -> None:
+    image_id = _upload(client, png_bytes)["image_id"]
+    response = client.post(
+        f"/api/images/{image_id}/infer/preview", json={"points": []}
+    )
+    assert response.status_code == 422
 
 
 # ─────────────────────────────────────────────────────────────────────────────

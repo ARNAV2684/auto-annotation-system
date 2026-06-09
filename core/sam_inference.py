@@ -97,6 +97,32 @@ class SAM2Segmenter:
         order = np.argsort(scores)[::-1]
         return masks[order].astype(bool), scores[order]
 
+    def predict_points(
+        self,
+        points_xy: list[tuple[int, int]],
+        labels: list[int],
+        multimask: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Segment from several include/exclude points. Requires :meth:`set_image`.
+
+        Args:
+            points_xy: ``[(x, y), ...]`` pixel coordinates.
+            labels: Parallel list; ``1`` = include (foreground), ``0`` = exclude.
+            multimask: If ``True``, return up to 3 candidate masks ranked by score.
+
+        Returns:
+            ``(masks, scores)`` sorted best-first; ``masks`` is ``(N, H, W)`` bool.
+        """
+        self._require_image()
+        with self._inference_context():
+            masks, scores, _ = self._predictor.predict(
+                point_coords=np.array(points_xy, dtype=np.float32),
+                point_labels=np.array(labels, dtype=np.int32),
+                multimask_output=multimask,
+            )
+        order = np.argsort(scores)[::-1]
+        return masks[order].astype(bool), scores[order]
+
     def predict_box(
         self, box_xyxy: tuple[int, int, int, int]
     ) -> tuple[np.ndarray, float]:

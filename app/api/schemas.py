@@ -108,6 +108,38 @@ class BoxRequest(BaseModel):
     y2: float = Field(ge=0)
 
 
+class PointSpec(BaseModel):
+    """One include/exclude point for Smart Select."""
+
+    x: float = Field(ge=0)
+    y: float = Field(ge=0)
+    label: Literal[0, 1] = Field(
+        default=1, description="1 = include (foreground), 0 = exclude (background)."
+    )
+
+
+class MultiPointRequest(BaseModel):
+    """Body for the Smart Select preview/commit endpoints."""
+
+    points: list[PointSpec] = Field(
+        min_length=1, description="Accumulated include/exclude points."
+    )
+    multimask: bool = Field(default=False)
+    simplify: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Polygon simplification tolerance (px). None = config default.",
+    )
+
+
+class PreviewResponse(BaseModel):
+    """Returned by /api/images/{id}/infer/preview — geometry only, not persisted."""
+
+    polygon: list[Polygon] = Field(description="Flat [x, y] pairs in absolute image pixels.")
+    box: Box
+    score: float = Field(ge=0.0, le=1.0)
+
+
 class AutoDetectRequest(BaseModel):
     """Body for /api/images/{id}/auto-detect."""
 
