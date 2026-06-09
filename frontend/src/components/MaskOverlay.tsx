@@ -6,6 +6,9 @@ interface MaskOverlayProps {
   annotations: Annotation[]
   selectedId: string | null
   hoveredId: string | null
+  /** When false (e.g. Smart Select active), masks ignore clicks/hover so the
+   *  whole canvas acts as a point-adding surface. */
+  interactive?: boolean
   onSelect: (annotationId: string) => void
   onHover: (annotationId: string | null) => void
 }
@@ -66,6 +69,7 @@ export function MaskOverlay({
   annotations,
   selectedId,
   hoveredId,
+  interactive = true,
   onSelect,
   onHover,
 }: MaskOverlayProps) {
@@ -86,11 +90,11 @@ export function MaskOverlay({
             strokeWidth={style.strokeWidth}
             dash={style.dash}
             strokeScaleEnabled={false}
-            onClick={() => onSelect(ann.annotation_id)}
-            onTap={() => onSelect(ann.annotation_id)}
-            onMouseEnter={() => onHover(ann.annotation_id)}
-            onMouseLeave={() => onHover(null)}
-            listening
+            onClick={interactive ? () => onSelect(ann.annotation_id) : undefined}
+            onTap={interactive ? () => onSelect(ann.annotation_id) : undefined}
+            onMouseEnter={interactive ? () => onHover(ann.annotation_id) : undefined}
+            onMouseLeave={interactive ? () => onHover(null) : undefined}
+            listening={interactive}
           />
         ))
       })}

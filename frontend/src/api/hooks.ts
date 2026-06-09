@@ -27,6 +27,7 @@ import type {
   ExportResponse,
   HealthResponse,
   ImageRecord,
+  MultiPointRequest,
   PointRequest,
   Project,
   StatsResponse,
@@ -124,6 +125,20 @@ export function useInferPoint(
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (body) => postJson<Annotation[]>(`/api/images/${imageId}/infer/point`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.annotationsFor(imageId) })
+      qc.invalidateQueries({ queryKey: qk.images })
+      qc.invalidateQueries({ queryKey: qk.stats })
+    },
+  })
+}
+
+export function useInferPoints(
+  imageId: string,
+): UseMutationResult<Annotation[], Error, MultiPointRequest> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body) => postJson<Annotation[]>(`/api/images/${imageId}/infer/points`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.annotationsFor(imageId) })
       qc.invalidateQueries({ queryKey: qk.images })

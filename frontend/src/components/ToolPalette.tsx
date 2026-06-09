@@ -10,6 +10,12 @@ export function ToolPalette({ current, onChange }: ToolPaletteProps) {
   return (
     <div className="inline-flex items-center gap-1 rounded border border-slate-200 bg-white p-1 shadow-sm">
       <ToolButton
+        label="Smart"
+        hint="hover to preview, click to add points, Enter to finish"
+        active={current === 'smart'}
+        onClick={() => onChange('smart')}
+      />
+      <ToolButton
         label="Point"
         hint="click to segment"
         active={current === 'point'}

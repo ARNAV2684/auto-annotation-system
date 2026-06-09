@@ -53,6 +53,25 @@ export interface BoxRequest {
   y2: number
 }
 
+/** One include/exclude point for Smart Select. */
+export interface PointSpec {
+  x: number
+  y: number
+  label: 0 | 1
+}
+
+export interface MultiPointRequest {
+  points: PointSpec[]
+  multimask?: boolean
+  simplify?: number | null
+}
+
+export interface PreviewResponse {
+  polygon: Polygon[]
+  box: Box
+  score: number
+}
+
 export interface AutoDetectRequest {
   prompts: string[]
 }

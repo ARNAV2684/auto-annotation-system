@@ -4,14 +4,16 @@ import {
   useDeleteAnnotation,
   useEmbed,
   useImages,
+  useInferPoints,
   usePatchAnnotation,
 } from '../api/hooks'
-import type { Project } from '../api/types'
+import type { PointSpec, Project } from '../api/types'
 import { AutoDetectPanel } from '../components/AutoDetectPanel'
 import { CanvasViewer, type Tool } from '../components/CanvasViewer'
 import { DetectionList } from '../components/DetectionList'
 import { ImageList } from '../components/ImageList'
 import { ShortcutHelpOverlay } from '../components/ShortcutHelpOverlay'
+import { SmartSelectPanel } from '../components/SmartSelectPanel'
 import { ToolPalette } from '../components/ToolPalette'
 import { useKeyboardShortcuts, type Shortcut } from '../components/useKeyboardShortcuts'
 
@@ -43,9 +45,13 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
   const [currentTool, setCurrentTool] = useState<Tool>('point')
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
-  // Tracks the previous image id so we can reset selection when it changes
+  // Smart Select state, owned here so the canvas and the side panel share it.
+  const [smartPoints, setSmartPoints] = useState<PointSpec[]>([])
+  const [simplify, setSimplify] = useState(2)
+  // Tracks the previous image id / tool so we can reset transient state on change
   // (React 19's "derive state during render" pattern - no effect needed).
   const [prevImageId, setPrevImageId] = useState<string | null>(null)
+  const [prevTool, setPrevTool] = useState<Tool>('point')
 
   // Auto-select the first image as soon as the list arrives (also during render
   // - no effect needed; the next render will see the new currentImageId).
@@ -55,7 +61,42 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
   if (prevImageId !== currentImageId) {
     setPrevImageId(currentImageId)
     setSelectedAnnotationId(null)
+    setSmartPoints([])
   }
+  if (prevTool !== currentTool) {
+    setPrevTool(currentTool)
+    if (currentTool !== 'smart') setSmartPoints([])
+  }
+
+  const inferPoints = useInferPoints(currentImageId ?? '')
+  const finishSmart = () => {
+    if (smartPoints.length === 0 || !currentImageId) return
+    inferPoints.mutate({ points: smartPoints, simplify }, { onSuccess: () => setSmartPoints([]) })
+  }
+  const cancelSmart = () => setSmartPoints([])
+
+  // Enter = finish, Esc = cancel while building a Smart Select (skip in inputs).
+  useEffect(() => {
+    if (currentTool !== 'smart' || smartPoints.length === 0) return
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        if (currentImageId) {
+          inferPoints.mutate(
+            { points: smartPoints, simplify },
+            { onSuccess: () => setSmartPoints([]) },
+          )
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault()
+        setSmartPoints([])
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [currentTool, smartPoints, simplify, currentImageId, inferPoints])
 
   // Pre-warm SAM's image embedding whenever the user opens an image. Fires-
   // and-forgets the side effect (mutateAsync result is ignored).
@@ -163,6 +204,12 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
         handler: () => stepImage(-1),
       },
       {
+        combo: 'Shift+S',
+        label: 'Smart Select tool',
+        group: 'Tools',
+        handler: () => setCurrentTool('smart'),
+      },
+      {
         combo: 'Shift+T',
         label: 'Point (target) tool',
         group: 'Tools',
@@ -231,6 +278,9 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
               tool={currentTool}
               selectedAnnotationId={selectedAnnotationId}
               onSelectAnnotation={setSelectedAnnotationId}
+              smartPoints={smartPoints}
+              onAddSmartPoint={(p) => setSmartPoints((prev) => [...prev, p])}
+              simplify={simplify}
             />
           ) : (
             <div className="flex h-full items-center justify-center text-slate-400">
@@ -242,6 +292,18 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
 
       {/* Right: detect + detections + export */}
       <aside className="flex min-h-0 min-w-0 flex-col gap-4 border-l border-slate-200 bg-slate-50 p-4">
+        {currentImage && currentTool === 'smart' && (
+          <div className="flex-shrink-0">
+            <SmartSelectPanel
+              pointCount={smartPoints.length}
+              simplify={simplify}
+              onSimplifyChange={setSimplify}
+              onFinish={finishSmart}
+              onCancel={cancelSmart}
+              busy={inferPoints.isPending}
+            />
+          </div>
+        )}
         {currentImage && (
           <div className="flex-shrink-0">
             <AutoDetectPanel imageId={currentImage.image_id} project={project} />
