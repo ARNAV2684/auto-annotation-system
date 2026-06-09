@@ -1,0 +1,12 @@
+# ──────────────────────────────────────────────────────────────────────────
+# Training-only dependencies (Sprint 7). Installed locally on the GPU machine
+# for custom model training — NOT part of the runtime or CI install, so the
+# GPU-free CI stays fast.
+#
+#   pip install -r requirements-train.txt
+#
+# NOTE: ultralytics pulls in torch; this project already installs the CUDA 12.8
+# torch build separately (see README), which ultralytics will reuse.
+# ──────────────────────────────────────────────────────────────────────────
+
+ultralytics
