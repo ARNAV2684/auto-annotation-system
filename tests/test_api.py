@@ -146,6 +146,48 @@ def test_root_returns_pointer_to_docs(client: TestClient) -> None:
 # Images
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _zip_of(png_bytes: bytes, names: list[str], extra: dict[str, bytes] | None = None) -> bytes:
+    """Build an in-memory zip containing the given image names (+ optional junk)."""
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as archive:
+        for name in names:
+            archive.writestr(name, png_bytes)
+        for name, content in (extra or {}).items():
+            archive.writestr(name, content)
+    return buf.getvalue()
+
+
+def test_upload_zip_extracts_images(client: TestClient, png_bytes: bytes) -> None:
+    zip_bytes = _zip_of(
+        png_bytes,
+        ["a.png", "sub/b.PNG"],
+        extra={"notes.txt": b"ignore me", "__MACOSX/._a.png": b"junk", "._hidden.png": b"x"},
+    )
+    response = client.post(
+        "/api/upload-zip", files={"file": ("batch.zip", zip_bytes, "application/zip")}
+    )
+    assert response.status_code == 201
+    records = response.json()
+    assert len(records) == 2  # only the two real images
+    assert {r["file_name"] for r in records} == {"a.png", "b.PNG"}
+    assert len(client.get("/api/images").json()) == 2
+
+
+def test_upload_zip_rejects_non_zip(client: TestClient) -> None:
+    response = client.post("/api/upload-zip", files={"file": ("x.png", b"notazip", "image/png")})
+    assert response.status_code == 400
+
+
+def test_upload_zip_with_no_images_422(client: TestClient) -> None:
+    zip_bytes = _zip_of(b"", [], extra={"readme.txt": b"hello"})
+    response = client.post(
+        "/api/upload-zip", files={"file": ("empty.zip", zip_bytes, "application/zip")}
+    )
+    assert response.status_code == 422
+
+
 def test_upload_returns_image_record(client: TestClient, png_bytes: bytes) -> None:
     body = _upload(client, png_bytes)
     assert body["file_name"] == "drone.png"
