@@ -127,6 +127,7 @@ trained_models:
 training:
   road_defects:
     dataset_src: data/cracks_potholes_ravelling   # labelled source (images/ + labels/ + data.yaml)
+    app_src: data/road_defects_app                # snapshot of reviewed in-app annotations (gitignored)
     work_dir: data/road_defects_yolo              # generated train-ready split (gitignored)
     base_model: yolov8n-seg.pt                    # pretrained base to fine-tune
     epochs: 100

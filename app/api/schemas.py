@@ -307,6 +307,13 @@ class Project(BaseModel):
             "auto-detect then runs it instead of GroundingDINO + SAM."
         ),
     )
+    trainable: bool = Field(
+        default=False,
+        description=(
+            "True if this project has a training track configured — the TRAIN "
+            "button can launch a fine-tuning job for it."
+        ),
+    )
 
 
 class CreateProjectRequest(BaseModel):
@@ -325,6 +332,77 @@ class AddClassRequest(BaseModel):
     """Body for POST /api/projects/{id}/classes — register a class under a group."""
 
     name: str = Field(description="Class label to register, e.g. 'house'.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Training jobs + model registry (Sprint 7)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TrainStartResponse(BaseModel):
+    """Response for POST /api/train/{track} — the job was launched."""
+
+    job_id: str = Field(description="Identifier of the spawned training job.")
+    state: str = Field(description="Always 'running' on a successful launch.")
+    num_images: int = Field(
+        description="Reviewed (done) images snapshotted into the training set."
+    )
+    num_annotations: int = Field(
+        description="Approved annotations snapshotted into the training set."
+    )
+
+
+class TrainResult(BaseModel):
+    """Outcome of a finished training job (the eval-gate verdict)."""
+
+    version: int = Field(description="Registry version recorded for this run.")
+    deployed: bool = Field(
+        description="True if the candidate beat the live model and was deployed."
+    )
+    candidate: dict[str, float] = Field(
+        description="Candidate metrics on the frozen test split."
+    )
+    baseline: dict[str, float] | None = Field(
+        default=None, description="Live model's metrics it was compared against."
+    )
+    counts: dict[str, int] | None = Field(
+        default=None, description="Train/val/test pair counts used for this run."
+    )
+
+
+class TrainStatusResponse(BaseModel):
+    """Response for GET /api/train/{track}/status."""
+
+    state: str = Field(description="idle | running | done | failed.")
+    phase: str | None = Field(
+        default=None, description="preparing | training | evaluating | gating | done."
+    )
+    message: str | None = Field(default=None, description="Human-readable progress.")
+    job_id: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    epochs_total: int | None = None
+    epochs_done: int | None = Field(
+        default=None, description="Epochs completed so far (training phase only)."
+    )
+    result: TrainResult | None = None
+
+
+class ModelVersion(BaseModel):
+    """One immutable trained-model version in the registry."""
+
+    version: int
+    created_at: str
+    note: str = ""
+    metrics: dict[str, float]
+    deployed: bool = Field(description="True if this version is the live model.")
+
+
+class ModelRegistryResponse(BaseModel):
+    """Response for GET /api/models/{track} — the 'Your Models' view."""
+
+    track: str
+    deployed_version: int | None
+    versions: list[ModelVersion]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

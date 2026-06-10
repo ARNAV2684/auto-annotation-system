@@ -28,6 +28,7 @@ import { ShortcutHelpOverlay } from '../components/ShortcutHelpOverlay'
 import { SmartSelectPanel } from '../components/SmartSelectPanel'
 import { ToolPalette } from '../components/ToolPalette'
 import { TopBar } from '../components/TopBar'
+import { TrainModal } from '../components/TrainModal'
 import { useHistory } from '../components/useHistory'
 import { useKeyboardShortcuts, type Shortcut } from '../components/useKeyboardShortcuts'
 
@@ -602,32 +603,7 @@ export function ReviewPage({ project, onBack, onOpenExport }: ReviewPageProps) {
         onClose={() => setHelpOpen(false)}
       />
 
-      {trainOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
-          onClick={() => setTrainOpen(false)}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-[26rem] rounded-lg bg-white p-6 shadow-xl"
-          >
-            <h2 className="text-lg font-semibold text-slate-900">Train a model</h2>
-            <p className="mt-2 text-sm text-slate-600">
-              Custom model training runs on your approved annotations and lands in the next sprint.
-              For now, keep labeling and approving — those become the training set.
-            </p>
-            <div className="mt-5 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setTrainOpen(false)}
-                className="rounded bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
-              >
-                Got it
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {trainOpen && <TrainModal project={project} onClose={() => setTrainOpen(false)} />}
     </div>
   )
 }

@@ -9,14 +9,30 @@ it is deployed into the app (the "only deploy if better" gate).
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 from utils.config import load_config
 
 
+def evaluate_weights(weights: Path, data_yaml: Path) -> dict[str, float]:
+    """Validate one checkpoint on the test split; return the headline metrics.
+
+    The returned keys (``seg_map50`` etc.) are the registry/eval-gate contract.
+    """
+    from ultralytics import YOLO  # heavy; imported only when actually evaluating
+
+    model = YOLO(str(weights))
+    metrics = model.val(data=str(data_yaml), split="test", verbose=False)
+    return {
+        "box_map50": float(metrics.box.map50),
+        "box_map5095": float(metrics.box.map),
+        "seg_map50": float(metrics.seg.map50),
+        "seg_map5095": float(metrics.seg.map),
+    }
+
+
 def evaluate(track: str) -> None:
     """Run validation on the test split and print the headline metrics."""
-    from ultralytics import YOLO
-
     cfg = load_config()
     tracks = cfg.get("training") or {}
     if track not in tracks:
@@ -28,13 +44,12 @@ def evaluate(track: str) -> None:
     if not weights.exists():
         raise SystemExit(f"No trained weights at {weights}. Train first.")
 
-    model = YOLO(str(weights))
-    metrics = model.val(data=str(data_yaml), split="test")
+    metrics = evaluate_weights(weights, data_yaml)
     print(f"Test metrics for '{track}':")
-    print(f"  box  mAP50:    {metrics.box.map50:.3f}")
-    print(f"  box  mAP50-95: {metrics.box.map:.3f}")
-    print(f"  mask mAP50:    {metrics.seg.map50:.3f}")
-    print(f"  mask mAP50-95: {metrics.seg.map:.3f}")
+    print(f"  box  mAP50:    {metrics['box_map50']:.3f}")
+    print(f"  box  mAP50-95: {metrics['box_map5095']:.3f}")
+    print(f"  mask mAP50:    {metrics['seg_map50']:.3f}")
+    print(f"  mask mAP50-95: {metrics['seg_map5095']:.3f}")
 
 
 def main() -> None:
