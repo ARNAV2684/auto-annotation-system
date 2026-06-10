@@ -279,7 +279,7 @@ class Project(BaseModel):
     """A named class-list + default-prompt preset for the annotation UI.
 
     Projects are pure UI presets — they don't change storage. The same image
-    can carry annotations from multiple projects (a tree mask and a culvert
+    can carry annotations from multiple projects (a tree mask and a pothole
     mask). Switching projects only changes which labels the dropdowns show and
     what default text fills the auto-detect box.
     """

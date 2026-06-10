@@ -475,11 +475,11 @@ def test_projects_shape(client: TestClient) -> None:
     assert "tree" in veg["default_prompts"]
 
 
-def test_projects_road_defects_has_culvert(client: TestClient) -> None:
+def test_projects_road_defects_matches_trained_model(client: TestClient) -> None:
+    # Must mirror the trained model's data.yaml names exactly (Sprint 7).
     projects = client.get("/api/projects").json()
     rd = next(p for p in projects if p["id"] == "road_defects")
-    assert "culvert" in rd["classes"]
-    assert "pothole" in rd["classes"]
+    assert rd["classes"] == ["cracks", "potholes", "ravelling"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -791,7 +791,7 @@ def test_export_without_project_id_uses_union_of_all_projects(
 ) -> None:
     image_id = _upload(client, png_bytes)["image_id"]
     _approved_ann_with_label(client, image_id, "tree")  # vegetation
-    _approved_ann_with_label(client, image_id, "pothole")  # road_defects
+    _approved_ann_with_label(client, image_id, "potholes")  # road_defects
     body = client.post(
         "/api/export", json={"formats": ["yolo"], "only_approved": True}
     ).json()
@@ -806,7 +806,7 @@ def test_export_includes_potholes_when_project_id_is_road_defects(
 ) -> None:
     # Regression test for the reported bug: road-defect labels exported blank.
     image_id = _upload(client, png_bytes)["image_id"]
-    _approved_ann_with_label(client, image_id, "pothole")
+    _approved_ann_with_label(client, image_id, "potholes")
     response = client.post(
         "/api/export",
         json={"formats": ["all"], "only_approved": True, "project_id": "road_defects"},
@@ -832,9 +832,9 @@ def test_export_rejects_unknown_project_id(client: TestClient, png_bytes: bytes)
 def test_export_class_ids_match_project_class_order(
     client: TestClient, png_bytes: bytes
 ) -> None:
-    # road_defects.classes = [pothole, crack, culvert, ...] -> culvert is id 2.
+    # road_defects.classes = [cracks, potholes, ravelling] -> ravelling is id 2.
     image_id = _upload(client, png_bytes)["image_id"]
-    _approved_ann_with_label(client, image_id, "culvert")
+    _approved_ann_with_label(client, image_id, "ravelling")
     body = client.post(
         "/api/export",
         json={"formats": ["yolo"], "only_approved": True, "project_id": "road_defects"},

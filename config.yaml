@@ -67,10 +67,14 @@ projects:
     label: Vegetation
     classes: [tree, palm_tree, shrub]
     default_prompts: [tree, palm tree]
+  # Classes mirror the trained road-defects model's data.yaml names exactly
+  # (see `training:` below) so model output needs no label translation.
+  # `ravelling` is omitted from default_prompts: those feed GroundingDINO,
+  # which doesn't know the term — the trained model covers it instead.
   - id: road_defects
     label: Road Defects
-    classes: [pothole, crack, culvert, patch_repair, lane_marking_fade]
-    default_prompts: [pothole, crack, culvert]
+    classes: [cracks, potholes, ravelling]
+    default_prompts: [potholes, cracks]
   - id: infrastructure
     label: Infrastructure
     classes: [bridge, traffic_sign, light_pole, electric_pole, building]
