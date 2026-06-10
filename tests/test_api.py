@@ -87,6 +87,13 @@ class StubModelRegistry:
             _FakeDetection(small, (2, 2, 8, 8), "tree", 0.6),
         ]
 
+    def auto_detect_trained(self, image_path: Path, project_id: str) -> list[Any]:
+        # One high-confidence detection, distinguishable from the grounded stub
+        # above (two 'tree' rows) so route-dispatch tests can tell them apart.
+        mask = np.zeros((40, 40), dtype=bool)
+        mask[10:30, 10:30] = True
+        return [_FakeDetection(mask, (10, 10, 30, 30), "potholes", 0.95)]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -480,6 +487,54 @@ def test_projects_road_defects_matches_trained_model(client: TestClient) -> None
     projects = client.get("/api/projects").json()
     rd = next(p for p in projects if p["id"] == "road_defects")
     assert rd["classes"] == ["cracks", "potholes", "ravelling"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Trained-model auto-detect (Sprint 7)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_auto_detect_uses_trained_model_when_deployed(
+    client: TestClient, png_bytes: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        routes,
+        "deployed_weights",
+        lambda pid: Path("deployed.pt") if pid == "road_defects" else None,
+    )
+    image_id = _upload(client, png_bytes)["image_id"]
+    body = client.post(
+        f"/api/images/{image_id}/auto-detect",
+        json={"prompts": ["potholes"], "project_id": "road_defects"},
+    ).json()
+    # The trained stub returns exactly one 'potholes' row; grounded returns two trees.
+    assert [a["label"] for a in body] == ["potholes"]
+    assert body[0]["source"] == "auto"
+
+
+def test_auto_detect_falls_back_to_grounded_sam_without_weights(
+    client: TestClient, png_bytes: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(routes, "deployed_weights", lambda pid: None)
+    image_id = _upload(client, png_bytes)["image_id"]
+    body = client.post(
+        f"/api/images/{image_id}/auto-detect",
+        json={"prompts": ["potholes"], "project_id": "road_defects"},
+    ).json()
+    assert [a["label"] for a in body] == ["tree", "tree"]
+
+
+def test_projects_expose_trained_model_flag(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        routes,
+        "deployed_weights",
+        lambda pid: Path("deployed.pt") if pid == "road_defects" else None,
+    )
+    projects = client.get("/api/projects").json()
+    by_id = {p["id"]: p for p in projects}
+    assert by_id["road_defects"]["has_trained_model"] is True
+    assert by_id["vegetation"]["has_trained_model"] is False
 
 
 # ─────────────────────────────────────────────────────────────────────────────

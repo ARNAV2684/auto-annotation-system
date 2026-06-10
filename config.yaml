@@ -105,6 +105,17 @@ voc:
 export:
   zip: true                 # also produce exports.zip alongside the per-format folders
 
+# ─── Trained models (Sprint 7) ───
+# Projects listed here run auto-detect through their own fine-tuned YOLOv8-seg
+# checkpoint instead of GroundingDINO + SAM. The ``weights`` path holds the
+# *deployed* (blessed) weights — promotion into it is gated on eval metrics.
+# If the file is missing, the project silently falls back to Grounded-SAM.
+trained_models:
+  road_defects:
+    weights: models/road_defects/deployed.pt
+    conf_threshold: 0.25
+    imgsz: 640
+
 # ─── Custom training (Sprint 7) ───
 # Offline YOLOv8-seg fine-tuning on labelled drone data. Run with:
 #   pip install -r requirements-train.txt
