@@ -21,6 +21,9 @@ python-dotenv
 # Detection (Sprint 2): GroundingDINO via HuggingFace transformers
 transformers
 
+# Trained-model auto-detect (Sprint 7): fine-tuned YOLOv8-seg checkpoints
+ultralytics
+
 # Visualization
 matplotlib
 

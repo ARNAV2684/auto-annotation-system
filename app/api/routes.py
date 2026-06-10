@@ -37,13 +37,18 @@ from app.api.schemas import (
     HealthResponse,
     ImagePatch,
     ImageRecord,
+    ModelRegistryResponse,
+    ModelVersion,
     MultiPointRequest,
     PointRequest,
     PolygonRequest,
     PreviewResponse,
     Project,
     StatsResponse,
+    TrainStartResponse,
+    TrainStatusResponse,
 )
+from app.services import training_service
 from app.services.model_registry import ModelRegistry, get_model_registry
 from app.services.project_store import ProjectStore
 from app.services.session_store import (
@@ -61,7 +66,9 @@ from core.annotation_converter import (
     resolve_export_classes,
 )
 from core.mask_processor import mask_to_bbox, mask_to_polygon, polygon_to_mask
+from core.trained_detector import deployed_weights
 from core.types import Detection
+from training import registry as model_registry_store
 from utils.config import load_config
 from utils.file_handler import make_run_dir, write_stats, zip_directory
 from utils.validators import validate_coco_file, validate_voc_file, validate_yolo_file
@@ -446,12 +453,19 @@ def copy_annotations(image_id: str, source_id: str, store: StoreDep) -> list[Ann
 def auto_detect(
     image_id: str, body: AutoDetectRequest, store: StoreDep, models: ModelsDep
 ) -> list[Annotation]:
-    """Run GroundingDINO + SAM. Replaces previous 'auto' annotations for this image."""
+    """Detect + segment everything in one image, replacing previous 'auto' rows.
+
+    Projects with a deployed fine-tuned model run it directly (prompts are
+    ignored); everything else runs the GroundingDINO + SAM chain.
+    """
     path = store.get_image_path(image_id)
     if path is None:
         raise HTTPException(status_code=404, detail=f"Unknown image_id: {image_id}")
     store.delete_annotations_for_image(image_id, source="auto")
-    detections: list[Detection] = models.auto_detect(path, body.prompts)
+    if body.project_id and deployed_weights(body.project_id) is not None:
+        detections: list[Detection] = models.auto_detect_trained(path, body.project_id)
+    else:
+        detections = models.auto_detect(path, body.prompts)
     rows = [
         _persist_annotation(store, image_id, d.mask, d.score, label=d.label, source="auto")
         for d in detections
@@ -671,8 +685,19 @@ def list_projects(store: ProjectStoreDep) -> list[Project]:
 
     The store seeds itself from ``config.yaml`` on first run and then owns the
     list, so this reflects any groups/classes the user created at runtime.
+    ``has_trained_model`` tells the UI whether auto-detect for that project
+    runs a deployed fine-tuned model (prompts box is then irrelevant);
+    ``trainable`` whether the TRAIN button can launch a job for it.
     """
-    return [Project(**p) for p in store.list_projects()]
+    tracks = load_config().get("training") or {}
+    return [
+        Project(
+            **p,
+            has_trained_model=deployed_weights(p["id"]) is not None,
+            trainable=p["id"] in tracks,
+        )
+        for p in store.list_projects()
+    ]
 
 
 @router.post("/projects", response_model=Project, status_code=status.HTTP_201_CREATED)
@@ -703,6 +728,97 @@ def add_project_class(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return Project(**project)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Training jobs + model registry (Sprint 7)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _require_track(track: str) -> dict:
+    """Return the training config block for ``track`` or raise 404."""
+    tracks = load_config().get("training") or {}
+    conf = tracks.get(track)
+    if conf is None:
+        raise HTTPException(status_code=404, detail=f"No training track: {track}")
+    return conf
+
+
+@router.post(
+    "/train/{track}",
+    response_model=TrainStartResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def start_training(track: str, store: StoreDep) -> TrainStartResponse:
+    """Snapshot reviewed in-app work and launch a background training job.
+
+    The job runs in a separate process: prepare data -> fine-tune -> evaluate
+    on the frozen test split -> deploy **only if better** than the live model.
+    Poll ``GET /api/train/{track}/status`` for progress.
+    """
+    conf = _require_track(track)
+    if training_service.job_running(track):
+        raise HTTPException(
+            status_code=409, detail="A training job for this track is already running."
+        )
+    num_images = num_annotations = 0
+    if conf.get("app_src"):
+        class_names = training_service.dataset_class_names(track)
+        num_images, num_annotations = training_service.snapshot_dataset(
+            store, load_config().root / conf["app_src"], class_names
+        )
+    job_id = training_service.spawn_job(track)
+    return TrainStartResponse(
+        job_id=job_id,
+        state="running",
+        num_images=num_images,
+        num_annotations=num_annotations,
+    )
+
+
+@router.get("/train/{track}/status", response_model=TrainStatusResponse)
+def training_status(track: str) -> TrainStatusResponse:
+    """Progress of the current (or last) training job for ``track``."""
+    _require_track(track)
+    return TrainStatusResponse(**training_service.read_status(track))
+
+
+def _registry_response(track: str) -> ModelRegistryResponse:
+    out_dir, _ = training_service.track_paths(track)
+    reg = model_registry_store.load_registry(out_dir)
+    return ModelRegistryResponse(
+        track=track,
+        deployed_version=reg.get("deployed"),
+        versions=[
+            ModelVersion(**v, deployed=v["version"] == reg.get("deployed"))
+            for v in reg["versions"]
+        ],
+    )
+
+
+@router.get("/models/{track}", response_model=ModelRegistryResponse)
+def list_model_versions(track: str) -> ModelRegistryResponse:
+    """Every trained version of this track's model, newest last."""
+    _require_track(track)
+    return _registry_response(track)
+
+
+@router.post("/models/{track}/deploy/{version}", response_model=ModelRegistryResponse)
+def deploy_model_version(track: str, version: int) -> ModelRegistryResponse:
+    """Make ``version`` the live model (manual rollback / promote).
+
+    This is the human override of the eval gate — explicit, so it's allowed.
+    The in-memory model cache notices the weights file changed and reloads on
+    the next auto-detect; no restart needed.
+    """
+    _require_track(track)
+    out_dir, deployed_path = training_service.track_paths(track)
+    try:
+        model_registry_store.deploy_version(out_dir, version, deployed_path)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"No version {version} for track {track}"
+        ) from exc
+    return _registry_response(track)
 
 
 @router.get("/stats", response_model=StatsResponse)

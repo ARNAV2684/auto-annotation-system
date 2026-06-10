@@ -13,8 +13,8 @@ interface TopBarProps {
 
 /**
  * Workspace top bar: project breadcrumb · filename · image navigator (◀ n/N ▶) ·
- * a "done / reviewed" toggle, and the TRAIN button (a stub until Sprint 7 wires
- * up real model training).
+ * a "done / reviewed" toggle, and the TRAIN button (opens the training dialog:
+ * start a fine-tuning job, watch progress, manage model versions).
  */
 export function TopBar({
   projectLabel,

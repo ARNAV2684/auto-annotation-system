@@ -94,6 +94,8 @@ export interface PolygonRequest {
 
 export interface AutoDetectRequest {
   prompts: string[]
+  /** Active project id; routes detection to its trained model if deployed. */
+  project_id?: string
 }
 
 export interface AnnotationPatch {
@@ -135,6 +137,53 @@ export interface Project {
   label: string
   classes: string[]
   default_prompts: string[]
+  /** True when auto-detect runs a deployed fine-tuned model (prompts unused). */
+  has_trained_model?: boolean
+  /** True when this project has a training track (TRAIN can launch a job). */
+  trainable?: boolean
+}
+
+// ─── Training jobs + model registry (Sprint 7) ────────────────────────────
+
+export interface TrainStartResponse {
+  job_id: string
+  state: string
+  num_images: number
+  num_annotations: number
+}
+
+export interface TrainResult {
+  version: number
+  deployed: boolean
+  candidate: Record<string, number>
+  baseline: Record<string, number> | null
+  counts?: Record<string, number> | null
+}
+
+export interface TrainStatus {
+  state: 'idle' | 'running' | 'done' | 'failed'
+  phase?: string | null
+  message?: string | null
+  job_id?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  epochs_total?: number | null
+  epochs_done?: number | null
+  result?: TrainResult | null
+}
+
+export interface ModelVersion {
+  version: number
+  created_at: string
+  note: string
+  metrics: Record<string, number>
+  deployed: boolean
+}
+
+export interface ModelsResponse {
+  track: string
+  deployed_version: number | null
+  versions: ModelVersion[]
 }
 
 export interface CreateProjectRequest {

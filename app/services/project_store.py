@@ -9,8 +9,14 @@ This store:
 
 * seeds itself from ``config.yaml``'s ``projects:`` block (or the legacy flat
   ``classes`` key) the first time it runs,
-* then persists every change to a gitignored JSON file (``outputs/projects.json``
-  by default), which becomes the single source of truth from then on.
+* persists every change to a gitignored JSON file (``outputs/projects.json``
+  by default),
+* and **reconciles with config on every startup**: built-in projects follow
+  config.yaml (label, prompts, class list), while classes the user registered
+  at runtime and user-created groups are preserved on top. Each built-in
+  project records which classes came from config (``seeded_classes``, internal
+  bookkeeping never exposed through the public getters) so user additions can
+  be told apart from stale config seeds.
 
 It is the one place that answers "what projects/classes exist right now", and is
 consumed by ``GET /api/projects``, the create/register routes, **and** the export
@@ -58,12 +64,12 @@ class ProjectStore:
     def list_projects(self) -> list[dict]:
         """Return a copy of every project dict."""
         with self._lock:
-            return [dict(p) for p in self._projects]
+            return [_public(p) for p in self._projects]
 
     def get_project(self, project_id: str) -> dict | None:
         with self._lock:
             match = next((p for p in self._projects if p["id"] == project_id), None)
-            return dict(match) if match else None
+            return _public(match) if match else None
 
     def create_project(
         self,
@@ -91,11 +97,14 @@ class ProjectStore:
                 "label": label,
                 "classes": _dedup_normalised(classes or []),
                 "default_prompts": list(default_prompts or []),
+                # User-created group: nothing came from config, so every class
+                # counts as a user addition if a same-id config project appears.
+                "seeded_classes": [],
             }
             self._projects.append(project)
             self._persist()
             logger.info("Created project %s (%s)", slug, label)
-            return dict(project)
+            return _public(project)
 
     def add_class(self, project_id: str, class_name: str) -> dict:
         """Register a class (label) under an existing group. Idempotent.
@@ -119,44 +128,37 @@ class ProjectStore:
                 project["classes"].append(name)
                 self._persist()
                 logger.info("Registered class '%s' under project %s", name, project_id)
-            return dict(project)
+            return _public(project)
 
     # ─── internal: load / seed / persist ─────────────────────────────────
 
     def _load_or_seed(self, cfg) -> None:
+        seeded = self._seed_from_config(cfg)
+        stored: list[dict] | None = None
         if self.path.exists():
             try:
                 raw = json.loads(self.path.read_text(encoding="utf-8"))
-                projects = raw.get("projects")
-                if projects:
-                    self._projects = projects
-                    return
+                stored = raw.get("projects") or None
             except (json.JSONDecodeError, OSError):
                 logger.warning("Corrupt %s — reseeding from config", self.path)
-        self._projects = self._seed_from_config(cfg)
+        self._projects = _reconcile(seeded, stored) if stored else seeded
         self._persist()
 
     @staticmethod
     def _seed_from_config(cfg) -> list[dict]:
         raw = cfg.get("projects") or []
         if raw:
-            return [
-                {
-                    "id": entry["id"],
-                    "label": entry["label"],
-                    "classes": _dedup_normalised(entry.get("classes", [])),
-                    "default_prompts": list(entry.get("default_prompts", [])),
-                }
-                for entry in raw
-            ]
+            return [_seed_entry(entry) for entry in raw]
         legacy = cfg.get("classes", []) or []
         return [
-            {
-                "id": "default",
-                "label": "Default",
-                "classes": _dedup_normalised(legacy),
-                "default_prompts": list(legacy),
-            }
+            _seed_entry(
+                {
+                    "id": "default",
+                    "label": "Default",
+                    "classes": legacy,
+                    "default_prompts": legacy,
+                }
+            )
         ]
 
     def _persist(self) -> None:
@@ -164,6 +166,49 @@ class ProjectStore:
         self.path.write_text(
             json.dumps({"projects": self._projects}, indent=2), encoding="utf-8"
         )
+
+
+def _seed_entry(entry: dict) -> dict:
+    """Build a project dict from a config block, recording its config seed."""
+    classes = _dedup_normalised(entry.get("classes", []))
+    return {
+        "id": entry["id"],
+        "label": entry["label"],
+        "classes": classes,
+        "default_prompts": list(entry.get("default_prompts", [])),
+        "seeded_classes": list(classes),
+    }
+
+
+def _reconcile(seeded: list[dict], stored: list[dict]) -> list[dict]:
+    """Merge config-seeded projects with the persisted store.
+
+    Config wins for built-in projects (label, prompts, class list). Classes the
+    user registered at runtime — anything not in the project's recorded seed —
+    are re-applied on top. User-created groups (ids absent from config) pass
+    through untouched. Files written before seed tracking existed carry no
+    ``seeded_classes``; their whole class list is treated as the old seed, so
+    built-ins snap cleanly to the current config.
+    """
+    stored_by_id = {p["id"]: p for p in stored}
+    merged: list[dict] = []
+    for seed in seeded:
+        prev = stored_by_id.pop(seed["id"], None)
+        if prev is None:
+            merged.append(seed)
+            continue
+        prev_seed = prev.get("seeded_classes", prev.get("classes", []))
+        custom = [c for c in prev.get("classes", []) if c not in prev_seed]
+        merged.append(
+            {**seed, "classes": _dedup_normalised(seed["classes"] + custom)}
+        )
+    merged.extend(stored_by_id.values())
+    return merged
+
+
+def _public(project: dict) -> dict:
+    """Copy a project dict without internal bookkeeping keys."""
+    return {k: v for k, v in project.items() if k != "seeded_classes"}
 
 
 def _dedup_normalised(classes: list[str]) -> list[str]:

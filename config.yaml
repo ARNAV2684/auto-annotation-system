@@ -67,10 +67,14 @@ projects:
     label: Vegetation
     classes: [tree, palm_tree, shrub]
     default_prompts: [tree, palm tree]
+  # Classes mirror the trained road-defects model's data.yaml names exactly
+  # (see `training:` below) so model output needs no label translation.
+  # `ravelling` is omitted from default_prompts: those feed GroundingDINO,
+  # which doesn't know the term — the trained model covers it instead.
   - id: road_defects
     label: Road Defects
-    classes: [pothole, crack, culvert, patch_repair, lane_marking_fade]
-    default_prompts: [pothole, crack, culvert]
+    classes: [cracks, potholes, ravelling]
+    default_prompts: [potholes, cracks]
   - id: infrastructure
     label: Infrastructure
     classes: [bridge, traffic_sign, light_pole, electric_pole, building]
@@ -100,3 +104,35 @@ voc:
 
 export:
   zip: true                 # also produce exports.zip alongside the per-format folders
+
+# ─── Trained models (Sprint 7) ───
+# Projects listed here run auto-detect through their own fine-tuned YOLOv8-seg
+# checkpoint instead of GroundingDINO + SAM. The ``weights`` path holds the
+# *deployed* (blessed) weights — promotion into it is gated on eval metrics.
+# If the file is missing, the project silently falls back to Grounded-SAM.
+trained_models:
+  road_defects:
+    weights: models/road_defects/deployed.pt
+    conf_threshold: 0.25
+    imgsz: 640
+
+# ─── Custom training (Sprint 7) ───
+# Offline YOLOv8-seg fine-tuning on labelled drone data. Run with:
+#   pip install -r requirements-train.txt
+#   python -m training.data_prep road_defects
+#   python -m training.train_road road_defects
+#   python -m training.evaluate road_defects
+# Only the road-defects track has labelled data today; the same block shape
+# supports more tracks later (just add another entry).
+training:
+  road_defects:
+    dataset_src: data/cracks_potholes_ravelling   # labelled source (images/ + labels/ + data.yaml)
+    app_src: data/road_defects_app                # snapshot of reviewed in-app annotations (gitignored)
+    work_dir: data/road_defects_yolo              # generated train-ready split (gitignored)
+    base_model: yolov8n-seg.pt                    # pretrained base to fine-tune
+    epochs: 100
+    imgsz: 640
+    batch: 8
+    split: [0.8, 0.1, 0.1]                        # train / val / test
+    seed: 42
+    output_dir: models/road_defects               # where runs + weights land (gitignored)

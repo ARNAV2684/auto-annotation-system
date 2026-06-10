@@ -87,6 +87,13 @@ class StubModelRegistry:
             _FakeDetection(small, (2, 2, 8, 8), "tree", 0.6),
         ]
 
+    def auto_detect_trained(self, image_path: Path, project_id: str) -> list[Any]:
+        # One high-confidence detection, distinguishable from the grounded stub
+        # above (two 'tree' rows) so route-dispatch tests can tell them apart.
+        mask = np.zeros((40, 40), dtype=bool)
+        mask[10:30, 10:30] = True
+        return [_FakeDetection(mask, (10, 10, 30, 30), "potholes", 0.95)]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -475,11 +482,166 @@ def test_projects_shape(client: TestClient) -> None:
     assert "tree" in veg["default_prompts"]
 
 
-def test_projects_road_defects_has_culvert(client: TestClient) -> None:
+def test_projects_road_defects_matches_trained_model(client: TestClient) -> None:
+    # Must mirror the trained model's data.yaml names exactly (Sprint 7).
     projects = client.get("/api/projects").json()
     rd = next(p for p in projects if p["id"] == "road_defects")
-    assert "culvert" in rd["classes"]
-    assert "pothole" in rd["classes"]
+    assert rd["classes"] == ["cracks", "potholes", "ravelling"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Trained-model auto-detect (Sprint 7)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_auto_detect_uses_trained_model_when_deployed(
+    client: TestClient, png_bytes: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        routes,
+        "deployed_weights",
+        lambda pid: Path("deployed.pt") if pid == "road_defects" else None,
+    )
+    image_id = _upload(client, png_bytes)["image_id"]
+    body = client.post(
+        f"/api/images/{image_id}/auto-detect",
+        json={"prompts": ["potholes"], "project_id": "road_defects"},
+    ).json()
+    # The trained stub returns exactly one 'potholes' row; grounded returns two trees.
+    assert [a["label"] for a in body] == ["potholes"]
+    assert body[0]["source"] == "auto"
+
+
+def test_auto_detect_falls_back_to_grounded_sam_without_weights(
+    client: TestClient, png_bytes: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(routes, "deployed_weights", lambda pid: None)
+    image_id = _upload(client, png_bytes)["image_id"]
+    body = client.post(
+        f"/api/images/{image_id}/auto-detect",
+        json={"prompts": ["potholes"], "project_id": "road_defects"},
+    ).json()
+    assert [a["label"] for a in body] == ["tree", "tree"]
+
+
+def test_projects_expose_trained_model_flag(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        routes,
+        "deployed_weights",
+        lambda pid: Path("deployed.pt") if pid == "road_defects" else None,
+    )
+    projects = client.get("/api/projects").json()
+    by_id = {p["id"]: p for p in projects}
+    assert by_id["road_defects"]["has_trained_model"] is True
+    assert by_id["vegetation"]["has_trained_model"] is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Training jobs + model registry (Sprint 7)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_start_training_snapshots_and_spawns(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(routes.training_service, "job_running", lambda t: False)
+    monkeypatch.setattr(
+        routes.training_service, "dataset_class_names", lambda t: ["cracks"]
+    )
+    monkeypatch.setattr(
+        routes.training_service, "snapshot_dataset", lambda s, d, c: (2, 5)
+    )
+    monkeypatch.setattr(
+        routes.training_service,
+        "spawn_job",
+        lambda t: (calls.append(t), "job123")[1],
+    )
+    response = client.post("/api/train/road_defects")
+    assert response.status_code == 202
+    body = response.json()
+    assert body == {
+        "job_id": "job123",
+        "state": "running",
+        "num_images": 2,
+        "num_annotations": 5,
+    }
+    assert calls == ["road_defects"]
+
+
+def test_start_training_conflicts_while_running(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(routes.training_service, "job_running", lambda t: True)
+    assert client.post("/api/train/road_defects").status_code == 409
+
+
+def test_start_training_unknown_track_404(client: TestClient) -> None:
+    assert client.post("/api/train/nope").status_code == 404
+
+
+def test_training_status_idle(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        routes.training_service, "read_status", lambda t: {"state": "idle"}
+    )
+    body = client.get("/api/train/road_defects/status").json()
+    assert body["state"] == "idle" and body["result"] is None
+
+
+def test_training_status_done_with_result(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        routes.training_service,
+        "read_status",
+        lambda t: {
+            "state": "done",
+            "phase": "done",
+            "message": "v2 deployed (beat the live model)",
+            "result": {
+                "version": 2,
+                "deployed": True,
+                "candidate": {"seg_map50": 0.65},
+                "baseline": {"seg_map50": 0.60},
+            },
+        },
+    )
+    body = client.get("/api/train/road_defects/status").json()
+    assert body["result"]["deployed"] is True
+    assert body["result"]["candidate"]["seg_map50"] == 0.65
+
+
+def test_models_registry_listing_and_deploy(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from training import registry as reg
+
+    out_dir = tmp_path / "m"
+    deployed = tmp_path / "deployed.pt"
+    monkeypatch.setattr(
+        routes.training_service, "track_paths", lambda t, config=None: (out_dir, deployed)
+    )
+    # Empty registry first.
+    body = client.get("/api/models/road_defects").json()
+    assert body["versions"] == [] and body["deployed_version"] is None
+    # Record a version, then promote it via the API (manual deploy/rollback).
+    weights = tmp_path / "w.pt"
+    weights.write_bytes(b"fake")
+    version = reg.add_version(out_dir, weights, {"seg_map50": 0.5}, note="run 1")
+    body = client.post(f"/api/models/road_defects/deploy/{version}").json()
+    assert body["deployed_version"] == version
+    assert body["versions"][0]["deployed"] is True
+    assert deployed.read_bytes() == b"fake"
+    # Unknown version -> 404.
+    assert client.post("/api/models/road_defects/deploy/99").status_code == 404
+
+
+def test_projects_expose_trainable_flag(client: TestClient) -> None:
+    projects = {p["id"]: p for p in client.get("/api/projects").json()}
+    assert projects["road_defects"]["trainable"] is True
+    assert projects["vegetation"]["trainable"] is False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -791,7 +953,7 @@ def test_export_without_project_id_uses_union_of_all_projects(
 ) -> None:
     image_id = _upload(client, png_bytes)["image_id"]
     _approved_ann_with_label(client, image_id, "tree")  # vegetation
-    _approved_ann_with_label(client, image_id, "pothole")  # road_defects
+    _approved_ann_with_label(client, image_id, "potholes")  # road_defects
     body = client.post(
         "/api/export", json={"formats": ["yolo"], "only_approved": True}
     ).json()
@@ -806,7 +968,7 @@ def test_export_includes_potholes_when_project_id_is_road_defects(
 ) -> None:
     # Regression test for the reported bug: road-defect labels exported blank.
     image_id = _upload(client, png_bytes)["image_id"]
-    _approved_ann_with_label(client, image_id, "pothole")
+    _approved_ann_with_label(client, image_id, "potholes")
     response = client.post(
         "/api/export",
         json={"formats": ["all"], "only_approved": True, "project_id": "road_defects"},
@@ -832,9 +994,9 @@ def test_export_rejects_unknown_project_id(client: TestClient, png_bytes: bytes)
 def test_export_class_ids_match_project_class_order(
     client: TestClient, png_bytes: bytes
 ) -> None:
-    # road_defects.classes = [pothole, crack, culvert, ...] -> culvert is id 2.
+    # road_defects.classes = [cracks, potholes, ravelling] -> ravelling is id 2.
     image_id = _upload(client, png_bytes)["image_id"]
-    _approved_ann_with_label(client, image_id, "culvert")
+    _approved_ann_with_label(client, image_id, "ravelling")
     body = client.post(
         "/api/export",
         json={"formats": ["yolo"], "only_approved": True, "project_id": "road_defects"},

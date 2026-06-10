@@ -23,6 +23,10 @@ models/sam_checkpoints/*
 *.pth
 *.onnx
 
+# ─── Training outputs (Sprint 7) — runs, weights, generated splits ───
+models/road_defects/
+runs/
+
 # ─── Data outputs / scratch ───
 # Everything under data/ is local-only by default — drone imagery, reference
 # videos, training datasets, and any pre-labelled exports stay on the dev

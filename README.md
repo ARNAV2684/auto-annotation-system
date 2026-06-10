@@ -2,31 +2,48 @@
 
 AI-assisted image annotation for **drone imagery**. A human clicks (or runs an
 auto-detector); **SAM 2** suggests precise object masks; a human approves; approved
-annotations export to **YOLO / COCO / Pascal VOC** for downstream model training.
+annotations export to **YOLO / COCO / Pascal VOC** — and feed a **custom model**
+that is trained, evaluated, and deployed from inside the app.
 
 Built as Project 1 of the AI & Computer Vision internship at GarudaUAV.
 
-> **Status:** Sprint 1 — foundation (repo, environment, SAM 2 inference core).
+> **Status:** custom training shipped — the loop below is closed end-to-end.
+> Remaining: Dockerization.
 
 ## What it does
 
 ```
-upload → SAM 2 embeds image once → prompt (GroundingDINO text | click | box)
-       → masks → clean → human approve/label → export YOLO/COCO/VOC → (re)train
+upload → annotate (auto-detect | click | box | smart select | polygon)
+       → human approve/label → export YOLO/COCO/VOC
+       → TRAIN → evaluate on a frozen test split → deploy only if better
+       → better auto-detect → annotate faster → repeat
 ```
 
 - **SAM 2** turns clicks/boxes into pixel-precise masks (class-agnostic).
-- **GroundingDINO** (Sprint 2) auto-suggests boxes from a text prompt ("tree"),
-  which feed SAM 2 — the "Grounded-SAM" pattern.
+- **GroundingDINO** auto-suggests boxes from a text prompt ("tree"), which feed
+  SAM 2 — the "Grounded-SAM" pattern. Used by projects without a trained model.
+- **Fine-tuned YOLOv8-seg** powers auto-detect for the Road Defects project
+  (cracks / potholes / ravelling) — one model call yields boxes, labels and
+  masks, no text prompts needed. See [`training/README.md`](training/README.md).
 - **Human-in-the-loop** review gate; approved masks become training data.
+- **TRAIN button**: reviewed work joins the dataset, a background job
+  fine-tunes and scores the candidate, and it is **deployed only if it beats
+  the live model** on the held-out test split. Every run is recorded as an
+  immutable version with one-click rollback.
+
+**Did custom training pay off?** On the held-out road-defects test split the
+generic Grounded-SAM pipeline scores **F1 0.02**; the fine-tuned model scores
+**F1 0.53** (mask mAP50 0.603). Full numbers + methodology:
+[`docs/before_after_road_defects.md`](docs/before_after_road_defects.md).
 
 ## Architecture
 
 | Layer | Tech | Location |
 |-------|------|----------|
-| AI engine | SAM 2, GroundingDINO, OpenCV, PyTorch | `core/` |
-| Backend API | FastAPI (REST) | `app/` (Sprint 4) |
-| Frontend | React + Vite | `frontend/` (Sprint 5) |
+| AI engine | SAM 2, GroundingDINO, YOLOv8-seg, OpenCV, PyTorch | `core/` |
+| Custom training | Ultralytics fine-tuning, eval gate, model registry | `training/` |
+| Backend API | FastAPI (REST) | `app/` |
+| Frontend | React + Vite | `frontend/` |
 | Config | `config.yaml` (no hardcoding) | repo root |
 
 ## Project roadmap — Sprints 1–7
@@ -77,14 +94,17 @@ Copy `.env.example` → `.env` and adjust as needed. All tunables live in `confi
 ## Repository layout
 
 ```
-app/      FastAPI backend (Sprint 4)
-core/     AI engine: preprocessor, sam_inference, detector, mask_processor, annotation_converter
+app/      FastAPI backend (routes, session/project stores, training service)
+core/     AI engine: preprocessor, sam_inference, detector, trained_detector,
+          mask_processor, annotation_converter
+training/ offline fine-tuning: data prep, train, evaluate, run_job (TRAIN
+          button backend), model registry, before/after comparison
 utils/    config loader, visualizer, file/IO helpers, validators
-models/   SAM 2 / GroundingDINO checkpoints (gitignored)
-data/     sample images & exported annotations
-tests/    pytest suite
-docs/     architecture, API reference, user guide
-frontend/ React + Vite SPA (Sprint 5)
+models/   checkpoints + trained model versions (gitignored)
+data/     sample images, training datasets, app-annotation snapshots (gitignored)
+tests/    pytest suite (GPU-free in CI)
+docs/     API contract, before/after evaluation report
+frontend/ React + Vite SPA
 ```
 
 ## Running the backend (Sprint 4+)
@@ -156,6 +176,18 @@ cd frontend
 npm run lint          # frontend lint (ESLint)
 npm run format        # auto-format with Prettier
 npm run build         # production build (also catches TypeScript errors)
+```
+
+Custom training (offline scripts behind the TRAIN button — see
+[`training/README.md`](training/README.md)):
+
+```powershell
+pip install -r requirements-train.txt        # ultralytics (not needed in CI)
+python -m training.data_prep road_defects    # build the train/val/test split
+python -m training.train_road road_defects   # fine-tune YOLOv8-seg
+python -m training.evaluate road_defects     # score on the frozen test split
+python -m training.run_job road_defects      # the full TRAIN-button pipeline
+python -m training.compare_baseline road_defects  # before/after report data
 ```
 
 Branching: `main` (protected) ← `develop` ← `feature/*`; merges via PR.
