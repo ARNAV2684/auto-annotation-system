@@ -28,11 +28,14 @@ import type {
   HealthResponse,
   ImagePatch,
   ImageRecord,
+  ModelsResponse,
   MultiPointRequest,
   PointRequest,
   PolygonRequest,
   Project,
   StatsResponse,
+  TrainStartResponse,
+  TrainStatus,
 } from './types'
 
 // ─── query keys (centralised so invalidation is type-safe) ───────────────
@@ -43,6 +46,8 @@ export const qk = {
   annotationsFor: (imageId: string) => ['annotations', imageId] as const,
   stats: ['stats'] as const,
   projects: ['projects'] as const,
+  trainStatus: (track: string) => ['train-status', track] as const,
+  models: (track: string) => ['models', track] as const,
 }
 
 // ─── reads ───────────────────────────────────────────────────────────────
@@ -283,6 +288,53 @@ export function useDeleteSession(): UseMutationResult<void, Error, void> {
     mutationFn: () => deleteJson<void>('/api/session'),
     onSuccess: () => {
       qc.invalidateQueries() // session wipe nukes everything
+    },
+  })
+}
+
+// ─── Training jobs + model registry (Sprint 7) ────────────────────────────
+
+export function useTrainStatus(track: string | null): UseQueryResult<TrainStatus> {
+  return useQuery({
+    queryKey: track ? qk.trainStatus(track) : ['train-status', 'none'],
+    queryFn: () => getJson<TrainStatus>(`/api/train/${track}/status`),
+    enabled: !!track,
+    // Poll while a job is live so the modal shows phase + epoch progress.
+    refetchInterval: (query) => (query.state.data?.state === 'running' ? 3000 : false),
+  })
+}
+
+export function useModels(track: string | null): UseQueryResult<ModelsResponse> {
+  return useQuery({
+    queryKey: track ? qk.models(track) : ['models', 'none'],
+    queryFn: () => getJson<ModelsResponse>(`/api/models/${track}`),
+    enabled: !!track,
+  })
+}
+
+export function useStartTraining(
+  track: string,
+): UseMutationResult<TrainStartResponse, Error, void> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => postJson<TrainStartResponse>(`/api/train/${track}`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.trainStatus(track) })
+      qc.invalidateQueries({ queryKey: qk.models(track) })
+    },
+  })
+}
+
+export function useDeployModelVersion(
+  track: string,
+): UseMutationResult<ModelsResponse, Error, number> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (version) => postJson<ModelsResponse>(`/api/models/${track}/deploy/${version}`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.models(track) })
+      // deployed.pt changed -> has_trained_model may flip; refresh projects.
+      qc.invalidateQueries({ queryKey: qk.projects })
     },
   })
 }
