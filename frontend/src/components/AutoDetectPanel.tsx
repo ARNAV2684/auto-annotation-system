@@ -26,15 +26,18 @@ export function AutoDetectPanel({ imageId, project }: AutoDetectPanelProps) {
   }
 
   const autoDetect = useAutoDetect(imageId)
+  const trained = project?.has_trained_model ?? false
 
   const run = () => {
     // Backend expects an array. We split on "." so users can enter multiple phrases.
+    // For trained-model projects the prompts are ignored server-side; the
+    // project_id is what routes detection to the fine-tuned model.
     const prompts = prompt
       .split('.')
       .map((p) => p.trim())
       .filter(Boolean)
     if (prompts.length === 0) return
-    autoDetect.mutate({ prompts })
+    autoDetect.mutate({ prompts, project_id: project?.id })
   }
 
   return (
@@ -43,20 +46,29 @@ export function AutoDetectPanel({ imageId, project }: AutoDetectPanelProps) {
         <span className="text-sm font-semibold text-slate-700">Auto-detect</span>
         {project && <span className="text-xs text-slate-400">project: {project.label}</span>}
       </div>
-      <input
-        type="text"
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        placeholder={projectDefault}
-        className="w-full rounded border border-slate-300 px-2 py-1 text-sm focus:border-sky-500 focus:outline-none"
-      />
+      {trained ? (
+        <div className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-xs text-emerald-800">
+          <span className="font-semibold">Custom trained model</span> — detection runs your
+          fine-tuned {project?.label} model. Text prompts aren&apos;t used.
+        </div>
+      ) : (
+        <input
+          type="text"
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          placeholder={projectDefault}
+          className="w-full rounded border border-slate-300 px-2 py-1 text-sm focus:border-sky-500 focus:outline-none"
+        />
+      )}
       <div className="mt-2 flex items-center justify-between">
         <span className="text-xs text-slate-500">
           {autoDetect.isPending
             ? 'Running…'
             : autoDetect.data
               ? `${autoDetect.data.length} found last run`
-              : 'Phrases separated by "."'}
+              : trained
+                ? `Classes: ${project?.classes.join(', ')}`
+                : 'Phrases separated by "."'}
         </span>
         <button
           type="button"

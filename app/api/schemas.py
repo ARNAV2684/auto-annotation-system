@@ -165,6 +165,13 @@ class AutoDetectRequest(BaseModel):
         min_length=1,
         description="One or more text prompts (e.g. ['tree', 'palm tree']).",
     )
+    project_id: str | None = Field(
+        default=None,
+        description=(
+            "Active project. If it has a deployed fine-tuned model, detection "
+            "runs that model and the text prompts are ignored."
+        ),
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -292,6 +299,13 @@ class Project(BaseModel):
     default_prompts: list[str] = Field(
         default_factory=list,
         description="Text phrases pre-filled in the auto-detect box.",
+    )
+    has_trained_model: bool = Field(
+        default=False,
+        description=(
+            "True if a fine-tuned model is deployed for this project — "
+            "auto-detect then runs it instead of GroundingDINO + SAM."
+        ),
     )
 
 

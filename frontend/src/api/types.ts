@@ -94,6 +94,8 @@ export interface PolygonRequest {
 
 export interface AutoDetectRequest {
   prompts: string[]
+  /** Active project id; routes detection to its trained model if deployed. */
+  project_id?: string
 }
 
 export interface AnnotationPatch {
@@ -135,6 +137,8 @@ export interface Project {
   label: string
   classes: string[]
   default_prompts: string[]
+  /** True when auto-detect runs a deployed fine-tuned model (prompts unused). */
+  has_trained_model?: boolean
 }
 
 export interface CreateProjectRequest {

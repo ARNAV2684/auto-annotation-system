@@ -27,6 +27,7 @@ import numpy as np
 from core.preprocessor import preprocess
 
 if TYPE_CHECKING:
+    from core.trained_detector import TrainedYoloSegmenter
     from core.types import Detection
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,9 @@ class ModelRegistry:
         self.detector = GroundingDinoDetector()
         self._current_image_id: str | None = None
         self._current_rgb: np.ndarray | None = None
+        # Fine-tuned per-project YOLO-seg models, loaded lazily on first use
+        # (a yolov8n-seg checkpoint is ~7 MB — cheap next to SAM + DINO).
+        self._trained: dict[str, TrainedYoloSegmenter] = {}
         self._lock = threading.Lock()
         logger.info(
             "Models loaded (segmenter on %s, detector on %s).",
@@ -139,6 +143,26 @@ class ModelRegistry:
             self._current_image_id = None  # we lost track of which id is loaded
             self._current_rgb = rgb
         return detections
+
+    def auto_detect_trained(self, image_path: Path, project_id: str) -> list[Detection]:
+        """Run a project's fine-tuned YOLO-seg model instead of Grounded-SAM.
+
+        The image goes in raw (no CLAHE/sharpen): the model was fine-tuned on
+        raw drone imagery, so enhanced input would be a train/serve mismatch.
+        Resolution is identical either way, so masks share the same pixel
+        space as SAM-produced annotations.
+        """
+        from core.trained_detector import build_for_project  # lazy; pulls ultralytics
+
+        bgr = cv2.imread(str(image_path))
+        if bgr is None:
+            raise FileNotFoundError(f"Could not read image: {image_path}")
+        with self._lock:
+            segmenter = self._trained.get(project_id)
+            if segmenter is None:
+                segmenter = build_for_project(project_id)
+                self._trained[project_id] = segmenter
+            return segmenter.detect(bgr)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

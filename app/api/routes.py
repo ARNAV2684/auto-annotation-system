@@ -61,6 +61,7 @@ from core.annotation_converter import (
     resolve_export_classes,
 )
 from core.mask_processor import mask_to_bbox, mask_to_polygon, polygon_to_mask
+from core.trained_detector import deployed_weights
 from core.types import Detection
 from utils.config import load_config
 from utils.file_handler import make_run_dir, write_stats, zip_directory
@@ -446,12 +447,19 @@ def copy_annotations(image_id: str, source_id: str, store: StoreDep) -> list[Ann
 def auto_detect(
     image_id: str, body: AutoDetectRequest, store: StoreDep, models: ModelsDep
 ) -> list[Annotation]:
-    """Run GroundingDINO + SAM. Replaces previous 'auto' annotations for this image."""
+    """Detect + segment everything in one image, replacing previous 'auto' rows.
+
+    Projects with a deployed fine-tuned model run it directly (prompts are
+    ignored); everything else runs the GroundingDINO + SAM chain.
+    """
     path = store.get_image_path(image_id)
     if path is None:
         raise HTTPException(status_code=404, detail=f"Unknown image_id: {image_id}")
     store.delete_annotations_for_image(image_id, source="auto")
-    detections: list[Detection] = models.auto_detect(path, body.prompts)
+    if body.project_id and deployed_weights(body.project_id) is not None:
+        detections: list[Detection] = models.auto_detect_trained(path, body.project_id)
+    else:
+        detections = models.auto_detect(path, body.prompts)
     rows = [
         _persist_annotation(store, image_id, d.mask, d.score, label=d.label, source="auto")
         for d in detections
@@ -671,8 +679,13 @@ def list_projects(store: ProjectStoreDep) -> list[Project]:
 
     The store seeds itself from ``config.yaml`` on first run and then owns the
     list, so this reflects any groups/classes the user created at runtime.
+    ``has_trained_model`` tells the UI whether auto-detect for that project
+    runs a deployed fine-tuned model (prompts box is then irrelevant).
     """
-    return [Project(**p) for p in store.list_projects()]
+    return [
+        Project(**p, has_trained_model=deployed_weights(p["id"]) is not None)
+        for p in store.list_projects()
+    ]
 
 
 @router.post("/projects", response_model=Project, status_code=status.HTTP_201_CREATED)
