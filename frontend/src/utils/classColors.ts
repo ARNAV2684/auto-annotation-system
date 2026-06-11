@@ -32,9 +32,11 @@ const PALETTE: RGB[] = [
   { r: 236, g: 72, b: 153 }, // pink
 ]
 
-// Unlabeled / empty objects render in a neutral slate so they read as "needs a
-// label" rather than as a real class.
-const NEUTRAL: RGB = { r: 148, g: 163, b: 184 } // slate-400
+// Unlabeled / empty objects render in a vivid sky blue so a freshly marked
+// object stays clearly visible (a neutral grey camouflages against grey
+// asphalt) and matches the blue Smart Select preview, giving continuity from
+// "collected" to "committed but not yet labelled".
+const NEUTRAL: RGB = { r: 14, g: 165, b: 233 } // sky-500
 
 /** djb2 string hash, wrapped to a non-negative 32-bit int. */
 function hashString(value: string): number {
