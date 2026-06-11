@@ -1,0 +1,44 @@
+# Keep the build context tiny: without this file `docker build` would upload
+# the whole working tree (gigabytes of datasets, weights, venv) to the daemon.
+
+# Secrets — must never enter an image
+.env
+*.env
+
+# Environments / caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Git / editor
+.git/
+.github/
+.idea/
+.vscode/
+
+# Data, outputs, weights — mounted as volumes, never baked into images
+data/
+outputs/
+models/
+runs/
+*.pt
+*.pth
+*.onnx
+*.zip
+
+# Frontend (has its own image + build context)
+frontend/
+
+# Local-only notes
+CLAUDE.md
+CLAUDE.local.md
+PROJECT_JOURNAL.md
+
+# Docker itself
+Dockerfile
+docker-compose.yml
+.dockerignore
