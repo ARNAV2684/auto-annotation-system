@@ -1,0 +1,59 @@
+# ──────────────────────────────────────────────────────────────────────────
+# One-command launch:   docker compose up --build -d
+#
+#   frontend  http://localhost:8080  (nginx: static SPA + /api proxy)
+#   backend   http://localhost:8000  (FastAPI + models on the GPU; Swagger at /docs)
+#
+# Everything stateful lives OUTSIDE the containers: model weights, sessions,
+# annotations and datasets are host folders mounted in, so `docker compose
+# down` / rebuilds never lose work. First boot needs the SAM checkpoint:
+#   docker compose run --rm backend python -m scripts.fetch_models
+# (GroundingDINO downloads itself on first use into the hf-cache volume.)
+#
+# No NVIDIA GPU? Delete the `deploy:` block below — everything falls back to
+# CPU (config `device: auto`), slow but functional.
+# ──────────────────────────────────────────────────────────────────────────
+services:
+  backend:
+    build: .
+    image: auto-annotation-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      FRONTEND_ORIGIN: http://localhost:8080
+      LOAD_MODELS_ON_STARTUP: ${LOAD_MODELS_ON_STARTUP:-true}
+    volumes:
+      - ./models:/app/models    # SAM checkpoint + trained versions/registry/deployed.pt
+      - ./outputs:/app/outputs  # sessions, annotations, exports, projects.json
+      - ./data:/app/data        # datasets + in-app training snapshots
+      - hf-cache:/root/.cache/huggingface  # GroundingDINO downloads once, then persists
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 300s  # first-ever boot also downloads GroundingDINO (~700 MB)
+
+  frontend:
+    build: ./frontend
+    image: auto-annotation-frontend
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+volumes:
+  hf-cache:
