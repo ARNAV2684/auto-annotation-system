@@ -91,6 +91,40 @@ python -c "import torch; print('CUDA:', torch.cuda.is_available())"
 
 Copy `.env.example` → `.env` and adjust as needed. All tunables live in `config.yaml`.
 
+## Run with Docker (one command)
+
+The whole system — backend with GPU models + frontend — runs from a single
+compose file. Requirements: **Docker Desktop** (WSL2 backend on Windows) and a
+recent **NVIDIA driver**. Verify GPU passthrough once with
+`docker run --rm --gpus all ubuntu nvidia-smi` — it should print your GPU.
+
+```powershell
+# 1. First time only: download the SAM checkpoint into the mounted models/
+#    folder (runs inside the image — no local Python needed)
+docker compose build backend
+docker compose run --rm backend python -m scripts.fetch_models
+
+# 2. Launch everything
+docker compose up --build -d
+
+# 3. Watch until the backend reports healthy (first boot also downloads
+#    GroundingDINO, ~700 MB, into a persistent cache volume)
+docker compose ps
+
+# 4. Open the app
+#    http://localhost:8080        — the annotation UI
+#    http://localhost:8000/docs   — backend Swagger
+
+# Stop (data survives — models/, outputs/ and data/ are host folders)
+docker compose down
+```
+
+Sessions, annotations, model weights, trained versions and datasets all live
+in mounted host folders, so containers are disposable. The TRAIN button works
+inside Docker too — the training job runs in the backend container on the
+same GPU. No GPU? Delete the `deploy:` block in `docker-compose.yml` and
+everything runs on CPU (slow, but fine for a demo).
+
 ## Repository layout
 
 ```
