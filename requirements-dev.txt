@@ -1,23 +1,24 @@
-# Dev + CI dependencies (GPU-free, lightweight).
+# Dev + CI dependencies (GPU-free, lightweight), pinned to the verified dev
+# environment so CI and every contributor get the identical toolchain.
 #
 # NOTE: torch / sam2 / transformers are intentionally NOT here — they are heavy and
 # GPU-specific, installed separately for local runtime (see README). CI runs only the
 # fast, GPU-free checks (lint + logic/unit tests), so it needs none of them.
 
-ruff
-pytest
-pytest-cov
+ruff==0.15.14
+pytest==9.0.3
+pytest-cov==7.1.0
 
 # Light runtime deps exercised by GPU-free unit tests
-numpy
-pillow
-opencv-python-headless
-pyyaml
-python-dotenv
-pydantic
+numpy==2.4.4
+pillow==12.2.0
+opencv-python-headless==4.13.0.92
+pyyaml==6.0.3
+python-dotenv==1.2.2
+pydantic==2.13.4
 
 # Backend (Sprint 4): FastAPI + httpx for TestClient.
 # httpx is needed by starlette.testclient (lets CI exercise routes without a real server).
-fastapi
-python-multipart
-httpx
+fastapi==0.136.3
+python-multipart==0.0.29
+httpx==0.28.1
