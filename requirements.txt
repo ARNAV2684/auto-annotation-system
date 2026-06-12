@@ -1,38 +1,40 @@
 # ──────────────────────────────────────────────────────────────────────────
-# Runtime dependencies. Exact versions will be pinned (via `pip freeze`) after
-# the environment is built & verified in Sprint 1, per brief §13.3.
+# Runtime dependencies, pinned to the exact versions of the verified dev
+# environment (brief §13.3) — same `pip install -r`, identical result on
+# any machine.
 #
 # NOTE: PyTorch is installed SEPARATELY with the CUDA 12.8 index (RTX 5060 /
 # Blackwell), not from PyPI defaults. See README "Environment setup".
 #   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+# (verified build: torch 2.11.0+cu128 / torchvision 0.26.0+cu128)
+# SAM 2 is installed from source pinned to a commit — see README / Dockerfile.
 # ──────────────────────────────────────────────────────────────────────────
 
 # Core CV / array
-numpy
-opencv-python
-Pillow
+numpy==2.4.4
+opencv-python==4.13.0.92
+Pillow==12.2.0
 
 # Config / models
-pyyaml
-pydantic
-python-dotenv
+pyyaml==6.0.3
+pydantic==2.13.4
+python-dotenv==1.2.2
 
-# SAM 2 installed from source (facebookresearch/sam2) — see README.
 # Detection (Sprint 2): GroundingDINO via HuggingFace transformers
-transformers
+transformers==5.9.0
 
 # Trained-model auto-detect (Sprint 7): fine-tuned YOLOv8-seg checkpoints
-ultralytics
+ultralytics==8.4.63
 
 # Visualization
-matplotlib
+matplotlib==3.10.9
 
 # Backend (Sprint 4): FastAPI + Uvicorn + multipart for file uploads
-fastapi
-uvicorn[standard]
-python-multipart
+fastapi==0.136.3
+uvicorn[standard]==0.48.0
+python-multipart==0.0.29
 
 # Testing / lint (dev)
-pytest
-pytest-cov
-ruff
+pytest==9.0.3
+pytest-cov==7.1.0
+ruff==0.15.14
