@@ -9,4 +9,4 @@
 # torch build separately (see README), which ultralytics will reuse.
 # ──────────────────────────────────────────────────────────────────────────
 
-ultralytics
+ultralytics==8.4.63
