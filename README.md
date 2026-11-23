@@ -7,6 +7,10 @@ that is trained, evaluated, and deployed from inside the app.
 
 Built as Project 1 of the AI & Computer Vision internship at GarudaUAV.
 
+![Demo: upload drone images, auto-detect with GroundingDINO + SAM 2, point/box/smart-select tools, review, export to YOLO/COCO/VOC, and the TRAIN dialog](docs/assets/demo.gif)
+
+<sub>Recorded on real drone imagery, running locally on an RTX 5060 laptop GPU (shown at 1.5× speed).</sub>
+
 > **Status:** custom training shipped — the loop below is closed end-to-end.
 > Remaining: Dockerization.
 
