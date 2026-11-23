@@ -4,6 +4,21 @@ All notable changes to the One-Click Auto Annotation System.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions are git tags on `main`.
 
+## [1.0.2] — 2026-11-23
+
+### Added
+- Demo GIF at the top of the README (`docs/assets/demo.gif`): a 40s
+  walkthrough on real drone imagery covering upload, text-prompted
+  auto-detect, point / box / smart-select tools, review, undo / redo,
+  YOLO / COCO / VOC export, project switching and the TRAIN dialog.
+
+## [1.0.1] — 2026-06-12
+
+### Changed
+- Every requirements file (`requirements.txt`, `requirements-dev.txt`,
+  `requirements-train.txt`) is now `==`-pinned to the exact versions of the
+  verified environment.
+
 ## [1.0.0] — 2026-06-11
 
 The Dockerization release — the original seven-sprint brief is complete.
